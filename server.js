@@ -1,9 +1,8 @@
-require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const path = require('path');
-
+const rateLimit = require('./middlewares/reteLimit.middleware'); 
 const authRoutes = require("./routes/auth.routes");
 
 const app = express();
@@ -31,6 +30,9 @@ requiredEnvVars.forEach(envVar => {
 
 app.use(express.json());
 
+// Aplicar el rate limit globalmente a todas las rutas de la API
+app.use("/api/v2", rateLimit);
+
 // Ruta base
 app.get("/", (_req, res) => {
   res.json({ message: "BACKEND AITA! PIZZA", version: "1.0.0" });
@@ -39,6 +41,7 @@ app.get("/", (_req, res) => {
 // Rutas API
 app.use("/api/v2", authRoutes);
 
+// Rutas estáticas para imágenes
 app.use('/imagenesCata', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', process.env.FRONTEND_URL || 'http://localhost:5173');
   res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
