@@ -34,7 +34,7 @@ exports.getClientes = async (_req, res) => {
 };
 
 // Actualizar cliente
-exports.updateCliente = async (req, res) => {
+exports.updateClientePuntos = async (req, res) => {
   const { id } = req.params;
   const { nombres, apellidos, telefono, direccion, dni } = req.body;
 
@@ -64,91 +64,10 @@ exports.updateCliente = async (req, res) => {
   }
 };
 
-// Crear cliente y vincular con usuario
-exports.createOrUpdateCliente = async (req, res) => {
-  const { id_usuario, nombres, apellidos, telefono, direccion, dni } = req.body;
+//crear cliente
+exports.createCliente = async (req, res) => { 
 
-  try {
-    const pool = await getConnection();
-
-    // verificar usuario
-    const usuarioResult = await pool.request()
-      .input("id_usuario", sql.Int, id_usuario)
-      .query("SELECT id_usuario FROM usuario WHERE id_usuario = @id_usuario");
-
-    if (!usuarioResult.recordset || usuarioResult.recordset.length === 0) {
-      return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    // insertar cliente y obtener id
-    const insertQuery = `
-      INSERT INTO cliente (nombres, apellidos, telefono, direccion, dni)
-      OUTPUT INSERTED.id_cliente
-      VALUES (@nombres, @apellidos, @telefono, @direccion, @dni)
-    `;
-
-    const insertResult = await pool.request()
-      .input("nombres", sql.VarChar(200), nombres)
-      .input("apellidos", sql.VarChar(200), apellidos)
-      .input("telefono", sql.VarChar(50), telefono)
-      .input("direccion", sql.VarChar(300), direccion)
-      .input("dni", sql.VarChar(30), dni)
-      .query(insertQuery);
-
-    const clienteId = insertResult.recordset && insertResult.recordset[0] && (insertResult.recordset[0].id_cliente ?? insertResult.recordset[0].ID_Cliente);
-    if (!clienteId) {
-      return res.status(500).json({ error: "No se pudo obtener el id del cliente insertado" });
-    }
-
-    // vincular usuario
-    await pool.request()
-      .input("clienteId", sql.Int, clienteId)
-      .input("id_usuario", sql.Int, id_usuario)
-      .query("UPDATE usuario SET id_cliente = @clienteId WHERE id_usuario = @id_usuario");
-
-    // recuperar cliente creado
-    const clienteRows = await pool.request()
-      .input("clienteId", sql.Int, clienteId)
-      .query("SELECT * FROM cliente WHERE id_cliente = @clienteId");
-
-    if (!clienteRows.recordset || clienteRows.recordset.length === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado después de guardar" });
-    }
-
-    return res.status(200).json(mapToCliente(clienteRows.recordset[0]));
-  } catch (error) {
-    console.error("createOrUpdateCliente error:", error);
-    return res.status(500).json({ error: "Error al guardar datos del cliente en la base de datos" });
-  }
 };
-
-// Listar todos los contratos
-exports.listarTodosContratos = async (_req, res) => {
-  const sqlQuery = `SELECT 
-    c.id_contrato,
-    CONCAT(cl.nombres, ' ', cl.apellidos) AS Nombre_Completo,
-    c.descripcion,
-    c.id_usuario,
-    c.referencia_diseño,
-    c.estado,
-    c.fecha_inicio
-  FROM 
-    contrato c
-  INNER JOIN 
-    usuario u ON c.ID_Usuario = u.id_usuario
-  INNER JOIN 
-    cliente cl ON u.id_cliente = cl.id_cliente;`;
-
-  try {
-    const pool = await getConnection();
-    const result = await pool.request().query(sqlQuery);
-    return res.status(200).json({ exito: true, datos: result.recordset });
-  } catch (err) {
-    console.error("listarTodosContratos error:", err);
-    return res.status(500).json({ error: "Error al listar contratos" });
-  }
-};
-
 // Obtener datos para boleta
 exports.datosBoletaCliente = async (req, res) => {
   const { id } = req.params;

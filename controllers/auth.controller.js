@@ -1,49 +1,62 @@
-const { getConnection, sql } = require("../config/Connection");
-const bcrypt = require("bcrypt");
+const { sql, getConnection } = require("../config/Connection");
 const jwt = require("jsonwebtoken");
+
+// Mapper: Adapta los datos del cliente a una estructura coherente
+function mapToCliente(row = {}) {
+  const template = {
+    id_cliente: null,
+    first_name: "",
+    last_name: "",
+    id_number: "",  
+  };
+
+  return {
+    ...template,
+    id_cliente: row.customer_id ?? template.customer_id,
+    first_name: row.first_name ?? template.first_name,
+    last_name: row.last_name ?? template.last_name,
+    id_number: row.id_number ?? template.id_number,  
+  };
+}
 
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { id_number } = req.body;  
 
-    if (!email || !password) {
-      return res.status(400).json({ error: "Todos los campos son obligatorios" });
+    if (!id_number) {
+      return res.status(400).json({ error: "El campo id_number es obligatorio" });
     }
 
     const pool = await getConnection();
 
-    // Preparar la consulta parametrizada
     const result = await pool.request()
-      .input("email", sql.VarChar, email)
-      .query("SELECT * FROM usuario WHERE email = @email");
+      .input("id_number", sql.VarChar, id_number)
+      .query("SELECT * FROM customers WHERE id_number = @id_number");
 
     if (result.recordset.length === 0) {
-      return res.status(401).json({ error: "Credenciales incorrectas" });
+      return res.status(401).json({ error: "Cliente no encontrado" });
     }
 
-    const user = result.recordset[0];
+    const client = result.recordset[0];
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ error: "Credenciales incorrectas" });
-    }
+    const { customer_id, first_name, last_name, id_number: clientIdNumber } = client;
 
-    const { id_usuario, id_cliente } = user;
+    const roll = (clientIdNumber === '72909750') ? 'admin' : 'cliente';
 
     const token = jwt.sign(
-      { id_usuario, id_cliente: id_cliente || null, user: user.user },
+      { id_cliente: customer_id || null, first_name, last_name, roll },  
       process.env.JWT_SECRET,
       { expiresIn: "1d" }
     );
 
-    delete user.password;
-
+    // Respuesta exitosa
     res.status(200).json({
-      message: "Login exitoso",
+      success: true,  
       token,
-      id_usuario,
-      id_cliente: id_cliente || null,
-      user,
+      nombre: first_name,
+      apellido: last_name,
+      id_cliente: customer_id || null,
+      roll 
     });
 
   } catch (error) {
