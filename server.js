@@ -1,11 +1,21 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+
 const helmet = require('helmet');
 const path = require('path');
 const rateLimit = require('./middlewares/reteLimit.middleware'); 
+
 const authRoutes = require("./routes/auth.routes");
+const categoriaRoutes = require("./routes/categoria.routes");
 const clienteRoutes = require("./routes/cliente.routes");
+const pedidoRoutes = require("./routes/pedido.routes");
+const proveedorRoutes = require("./routes/proveedor.routes");
+const tamanopizzaRoutes = require("./routes/tamano_pizza.routes");
+const usuarioRoutes = require("./routes/usuario.routes");
+const ventaRoutes = require("./routes/venta.routes");
+
+
 
 // IMPORT: conexión MSSQL
 const { getConnection } = require('./config/Connection');
@@ -17,7 +27,7 @@ app.use(helmet());
 
 // CORS
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || 'http://localhost:3001',
+  origin: process.env.FRONTEND_URL || 'http://localhost:4200',
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -45,7 +55,14 @@ app.get("/", (_req, res) => {
 
 // Rutas API
 app.use("/api/v2", authRoutes);
+app.use("/api/v2", categoriaRoutes);
 app.use("/api/v2", clienteRoutes);
+app.use("/api/v2", pedidoRoutes);
+app.use("/api/v2", proveedorRoutes);
+app.use("/api/v2", tamanopizzaRoutes);
+app.use("/api/v2", usuarioRoutes);
+app.use("/api/v2", ventaRoutes);
+
 
 // Rutas estáticas para imágenes
 app.use('/imagenesCata', (req, res, next) => {

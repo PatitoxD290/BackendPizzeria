@@ -1,175 +1,220 @@
-//1 Categoría
+// 1. Categoría
 const Categoria = {
-  category_id: 0,
-  category_name: "",
-  category_description: ""
+  categoria_id: 0,
+  nombre_categoria: "",
+  descripcion_categoria: ""
 };
 
-//2 Tamaño de pizza
+// 2. Tamaño de Pizza
 const TamanoPizza = {
-  size_id: 0,
-  size_name: "",
-  slices: 0,
-  description: ""
+  tamano_id: 0,
+  nombre_tamano: "",
+  porciones: "",
+  descripcion: ""
 };
 
-//3 Proveedor
+// 3. Proveedor
 const Proveedor = {
-  supplier_id: 0,
-  supplier_name: "",
-  tax_id: "",
-  address: "",
-  phone: "",
+  proveedor_id: 0,
+  nombre_proveedor: "",
+  ruc: "",
+  direccion: "",
+  telefono: "",
   email: "",
-  contact_person: "",
-  status: "ACTIVE",
-  registration_date: ""
+  persona_contacto: "",
+  estado: "A",
+  fecha_registro: ""
 };
 
-//4 Ingrediente / Insumo
+// 4. Ingrediente / Insumo
 const Ingrediente = {
-  ingredient_id: 0,
-  ingredient_name: "",
-  ingredient_description: "",
-  unit_of_measure: "",
-  ingredient_category: "",
-  min_stock: 0,
-  max_stock: 0,
-  status: "ACTIVE",
-  registration_date: ""
+  ingrediente_id: 0,
+  nombre_ingrediente: "",
+  descripcion_ingrediente: "",
+  unidad_medida: "",
+  categoria_ingrediente: "",
+  stock_minimo: 0,
+  stock_maximo: 0,
+  estado: "A",
+  fecha_registro: ""
 };
 
-//5 Receta (cabecera)
+// 5. Receta (cabecera)
 const Receta = {
-  recipe_id: 0,
-  recipe_name: "",
-  recipe_description: "",
-  estimated_time_minutes: 0
+  receta_id: 0,
+  nombre_receta: "",
+  descripcion_receta: "",
+  tiempo_estimado_minutos: 0
 };
 
-//6 Detalle de Receta
+// 6. Detalle de Receta
 const DetalleReceta = {
-  recipe_detail_id: 0,
-  recipe_id: 0,
-  ingredient_id: 0,
-  required_quantity: 0,
-  unit_of_measure: "",
-  usage_description: ""
+  detalle_receta_id: 0,
+  receta_id: 0,
+  ingrediente_id: 0,
+  cantidad_requerida: 0.0,
+  unidad_medida: "",
+  descripcion_uso: ""
 };
 
-//7 Producto
+// 7. Producto
 const Producto = {
-  product_id: 0,
-  product_name: "",
-  product_description: "",
-  category_id: 0,
-  recipe_id: null,
-  sale_price: 0.0
+  producto_id: 0,
+  nombre_producto: "",
+  descripcion_producto: "",
+  categoria_id: 0,
+  receta_id: null,
+  precio_venta: 0.0,
+  estado: "A",
+  fecha_registro: ""
 };
 
-//8 Stock (entrada de inventario)
+// 7.1. Precios por tamaño
+const PrecioProducto = {
+  precio_id: 0,
+  producto_id: 0,
+  tamano_id: null,
+  precio: 0.0,
+  activo: true,
+  fecha_registro: ""
+};
+
+// 8. Stock (entrada de inventario)
 const Stock = {
   stock_id: 0,
-  ingredient_id: 0,
-  supplier_id: 0,
-  batch_number: "",
-  quantity_received: 0,
-  unit_cost: 0.0,
-  total_cost: 0.0,
-  entry_date: "",
-  expiration_date: "",
-  status: "RECEIVED"
+  ingrediente_id: 0,
+  proveedor_id: 0,
+  numero_lote: "",
+  cantidad_recibida: 0,
+  costo_unitario: 0.0,
+  costo_total: 0.0,
+  fecha_entrada: "",
+  fecha_vencimiento: "",
+  estado: "A"
 };
 
-//9 Movimiento de Stock
+// 9. Movimiento de Stock
 const MovimientoStock = {
-  movement_id: 0,
-  ingredient_id: 0,
+  movimiento_id: 0,
+  ingrediente_id: 0,
   stock_id: 0,
-  movement_type: "INCOME",
-  quantity: 0,
-  current_stock: 0,
-  movement_date: "",
-  reason: "",
-  registered_by: ""
+  tipo_movimiento: "", // ENTRADA, SALIDA, AJUSTE
+  cantidad: 0,
+  stock_actual: 0,
+  fecha_movimiento: "",
+  motivo: "",
+  registrado_por: "",
+  usuario_id: null
 };
 
-//10 Cliente
+// 10. Cliente
 const Cliente = {
-  customer_id: 0,
-  first_name: "",
-  last_name: "",
-  id_number: ""
+  cliente_id: 0,
+  nombres: "",
+  apellidos: "",
+  numero_documento: "",
+  telefono: "",
+  email: "",
+  direccion: "",
+  fecha_registro: ""
 };
 
-//11 Cupón
+// 11. Cupón
 const Cupon = {
-  coupon_id: 0,
-  coupon_code: "",
-  description: "",
-  discount_type: "PERCENTAGE",
-  discount_value: 0.0,
-  minimum_amount: 0.0,
-  max_uses: 0,
-  current_uses: 0,
-  start_date: "",
-  end_date: "",
-  status: "ACTIVE",
-  registration_date: ""
+  cupon_id: 0,
+  codigo_cupon: "",
+  descripcion: "",
+  tipo_descuento: "", // PORCENTAJE o MONTO
+  valor_descuento: 0.0,
+  monto_minimo: 0.0,
+  usos_maximos: 0,
+  usos_actuales: 0,
+  fecha_inicio: "",
+  fecha_fin: "",
+  estado: "A",
+  fecha_registro: ""
 };
 
-//12 Puntos del Cliente
-const PuntosCliente = {
-  points_id: 0,
-  customer_id: 0,
-  accumulated_points: 0,
-  used_points: 0,
-  available_points: 0,
-  update_date: ""
+// 12. Usuario
+const Usuario = {
+  usuario_id: 0,
+  dni: "",
+  password: "",
+  nombre_completo: "",
+  rol: "", // ADMIN o EMPLEADO
+  estado: "A",
+  fecha_registro: ""
 };
 
-//13 Pedido (cabecera)
+// 13. Pedido (cabecera)
 const Pedido = {
-  order_id: 0,
-  customer_id: 0,
-  order_date: "",
-  order_time: "",
-  order_status: "PENDING",
-  registration_date: "",
-  product_id: 0,
-  size_id: null,
-  quantity: 1,
-  notes: "",
-  subtotal: 0.0
+  pedido_id: 0,
+  cliente_id: 0,
+  usuario_id: null,
+  fecha_pedido: "",
+  hora_pedido: "",
+  estado_pedido: "PENDIENTE",
+  subtotal: 0.0,
+  monto_descuento: 0.0,
+  total: 0.0,
+  notas_generales: "",
+  fecha_registro: ""
 };
 
-//14 Venta
+// 14. Detalle de Pedido
+const DetallePedido = {
+  detalle_pedido_id: 0,
+  pedido_id: 0,
+  producto_id: 0,
+  tamano_id: null,
+  cantidad: 0,
+  precio_unitario: 0.0,
+  subtotal: 0.0,
+  notas_producto: ""
+};
+
+// 15. Venta
 const Venta = {
-  sale_id: 0,
-  sale_type: "BOLETA",
-  sale_date: "",
-  order_id: null,
-  place: "",
-  payment_method: "EFECTIVO",
+  venta_id: 0,
+  pedido_id: 0,
+  tipo_comprobante: "", // FACTURA o BOLETA
+  fecha_venta: "",
+  usuario_id: null,
+  lugar_emision: "",
+  metodo_pago: "",
   subtotal: 0.0,
   igv: 0.0,
-  total_amount: 0.0
+  total: 0.0
 };
 
-//15 Venta_Detalle
-const VentaDetalle = {
-  sale_detail_id: 0,
-  sale_id: 0,
-  order_id: 0
-};
-
-//16 Uso de Cupón
+// 16. Uso de Cupón
 const UsoCupon = {
-  coupon_usage_id: 0,
-  coupon_id: 0,
-  order_id: 0,
-  customer_id: 0,
-  discount_applied: 0.0,
-  sale_amount: 0.0,
-  usage_date: ""
+  uso_cupon_id: 0,
+  cupon_id: 0,
+  pedido_id: 0,
+  cliente_id: 0,
+  descuento_aplicado: 0.0,
+  monto_venta: 0.0,
+  fecha_uso: ""
+};
+
+// Exportar todos los modelos
+module.exports = {
+  Categoria,
+  TamanoPizza,
+  Proveedor,
+  Ingrediente,
+  Receta,
+  DetalleReceta,
+  Producto,
+  PrecioProducto,
+  Stock,
+  MovimientoStock,
+  Cliente,
+  Cupon,
+  Usuario,
+  Pedido,
+  DetallePedido,
+  Venta,
+  UsoCupon
 };

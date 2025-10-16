@@ -1,70 +1,75 @@
 const { sql, getConnection } = require("../config/Connection");
 const jwt = require("jsonwebtoken");
+const bcrypt = require("bcryptjs");
 
-// Mapper: Adapta los datos del cliente a una estructura coherente
-function mapToCliente(row = {}) {
-  const template = {
-    id_cliente: null,
-    first_name: "",
-    last_name: "",
-    id_number: "",  
-  };
-
-  return {
-    ...template,
-    id_cliente: row.customer_id ?? template.customer_id,
-    first_name: row.first_name ?? template.first_name,
-    last_name: row.last_name ?? template.last_name,
-    id_number: row.id_number ?? template.id_number,  
-  };
-}
-
+// 🔹 LOGIN
 exports.login = async (req, res) => {
   try {
-    const { id_number } = req.body;  
+    const { dni, password } = req.body;
 
-    if (!id_number) {
-      return res.status(400).json({ error: "El campo id_number es obligatorio" });
+    if (!dni || !password) {
+      return res.status(400).json({ error: "Los campos DNI y contraseña son obligatorios." });
     }
 
     const pool = await getConnection();
 
+    // Buscar usuario en la tabla 'usuarios'
     const result = await pool.request()
-      .input("id_number", sql.VarChar, id_number)
-      .query("SELECT * FROM customers WHERE id_number = @id_number");
+      .input("dni", sql.VarChar, dni)
+      .query("SELECT * FROM usuarios WHERE dni = @dni");
 
     if (result.recordset.length === 0) {
-      return res.status(401).json({ error: "Cliente no encontrado" });
+      return res.status(401).json({ error: "Usuario no encontrado." });
     }
 
-    const client = result.recordset[0];
+    const user = result.recordset[0];
 
-    const { customer_id, first_name, last_name, id_number: clientIdNumber } = client;
+    // Verificar si el usuario está activo
+    if (user.estado !== "A") {
+      return res.status(403).json({ error: "Usuario inactivo. Contacte con el administrador." });
+    }
 
-    const roll = (clientIdNumber === '72909750') ? 'admin' : 'cliente';
+    // Verificar contraseña con bcrypt
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Contraseña incorrecta." });
+    }
 
+    // Generar token JWT
     const token = jwt.sign(
-      { id_cliente: customer_id || null, first_name, last_name, roll },  
+      {
+        usuario_id: user.usuario_id,
+        dni: user.dni,
+        nombre_completo: user.nombre_completo,
+        rol: user.rol,
+      },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" }
+      { expiresIn: "1d" } // Expira en 1 día
     );
 
-    // Respuesta exitosa
+    // Respuesta al cliente
     res.status(200).json({
-      success: true,  
+      success: true,
+      message: "Inicio de sesión exitoso.",
       token,
-      nombre: first_name,
-      apellido: last_name,
-      id_cliente: customer_id || null,
-      roll 
+      user: {
+        id: user.usuario_id,
+        nombre: user.nombre_completo,
+        dni: user.dni,
+        rol: user.rol,
+      },
     });
 
   } catch (error) {
     console.error("Error en login:", error);
-    res.status(500).json({ error: "Error interno del servidor" });
+    res.status(500).json({ error: "Error interno del servidor." });
   }
 };
 
+// 🔹 LOGOUT
 exports.logout = (_req, res) => {
-  res.status(200).json({ message: "Logout exitoso. Token eliminado del cliente." });
+  res.status(200).json({
+    success: true,
+    message: "Sesión cerrada correctamente. El token debe eliminarse en el cliente.",
+  });
 };
