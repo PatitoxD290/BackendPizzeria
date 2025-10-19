@@ -42,7 +42,6 @@ exports.login = async (req, res) => {
         dni: user.dni,
         nombre_completo: user.nombre_completo,
         rol: user.rol,
-        server_key: global.SERVER_SESSION_KEY // 👈 se agrega esta clave
       },
       process.env.JWT_SECRET,
       { expiresIn: "1d" } // Expira en 1 día

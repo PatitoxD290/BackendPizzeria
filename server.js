@@ -1,10 +1,3 @@
-const crypto = require("crypto");
-
-// 🔑 Clave única por reinicio del servidor
-global.SERVER_SESSION_KEY = crypto.randomBytes(32).toString("hex");
-console.log(`[SECURITY] Clave de sesión generada: ${global.SERVER_SESSION_KEY.substring(0, 10)}...`);
-
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
