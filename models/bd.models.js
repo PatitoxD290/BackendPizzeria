@@ -110,12 +110,8 @@ const MovimientoStock = {
 // 10. Cliente
 const Cliente = {
   cliente_id: 0,
-  nombres: "",
-  apellidos: "",
-  numero_documento: "",
-  telefono: "",
-  email: "",
-  direccion: "",
+  nombre_completo: "",
+  dni: "",
   fecha_registro: ""
 };
 

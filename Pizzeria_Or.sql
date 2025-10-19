@@ -170,25 +170,13 @@ GO
 -- ORIGEN: //12 Clientes
 CREATE TABLE clientes (
     cliente_id INT IDENTITY(1,1) PRIMARY KEY,
-    nombres VARCHAR(255) NOT NULL,
-    apellidos VARCHAR(255) NOT NULL,
-    dni VARCHAR(20) NOT NULL UNIQUE 
+    nombre_completo VARCHAR(255) NOT NULL,
+    dni VARCHAR(20) NOT NULL UNIQUE,
+    fecha_registro DATETIME DEFAULT GETDATE()
 );
 GO
 
--- ORIGEN: //13 Puntos de cliente
---CREATE TABLE puntos_cliente (
-  --  puntos_cliente_id INT IDENTITY(1,1) PRIMARY KEY,
-    --cliente_id INT NOT NULL,                      
-    --puntos_acumulados INT NOT NULL DEFAULT 0,
-    --puntos_usados INT NOT NULL DEFAULT 0,
-    --puntos_disponibles INT NOT NULL DEFAULT 0,
-    --fecha_actualizacion DATETIME NOT NULL DEFAULT GETDATE(),
-    --CONSTRAINT fk_puntoscliente_cliente FOREIGN KEY (cliente_id) REFERENCES clientes(cliente_id)
---);
---GO
-
--- ORIGEN: //14 Cupones
+-- ORIGEN: //13 Cupones
 CREATE TABLE cupones (
     cupon_id INT IDENTITY(1,1) PRIMARY KEY,
     codigo_cupon VARCHAR(50) NOT NULL UNIQUE,
@@ -208,7 +196,7 @@ CREATE TABLE cupones (
 );
 GO
 
--- ORIGEN: //15 Pedidos 
+-- ORIGEN: //14 Pedidos 
 CREATE TABLE pedidos (
     pedido_id INT IDENTITY(1,1) PRIMARY KEY,
     cliente_id INT NOT NULL,
@@ -230,7 +218,7 @@ CREATE TABLE pedidos (
 );
 GO
 
--- ORIGEN: //16 Detalle de pedidos
+-- ORIGEN: //15 Detalle de pedidos
 CREATE TABLE detalle_pedidos (
     detalle_pedido_id INT IDENTITY(1,1) PRIMARY KEY,
     pedido_id INT NOT NULL,
@@ -251,7 +239,7 @@ CREATE TABLE detalle_pedidos (
 );
 GO
 
--- ORIGEN: //17 Ventas 
+-- ORIGEN: //16 Ventas 
 CREATE TABLE ventas (
     venta_id INT IDENTITY(1,1) PRIMARY KEY,
     pedido_id INT NOT NULL UNIQUE,
@@ -271,7 +259,7 @@ CREATE TABLE ventas (
 );
 GO
 
--- ORIGEN: //18 Uso de cupones
+-- ORIGEN: //17 Uso de cupones
 CREATE TABLE uso_cupones (
     uso_cupon_id INT IDENTITY(1,1) PRIMARY KEY,
     cupon_id INT NOT NULL,

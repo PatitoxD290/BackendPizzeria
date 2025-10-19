@@ -23,9 +23,15 @@ exports.verifyToken = (req, res, next) => {
     // Verificar el token con la clave secreta
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
+    // 👇 Verificar que el token corresponda a la sesión actual del servidor
+    if (decoded.server_key !== global.SERVER_SESSION_KEY) {
+      return res.status(401).json({
+        error: "Token inválido. El servidor ha reiniciado, por favor inicie sesión nuevamente."
+      });
+    }
+
     // Guardar los datos del usuario verificado en la request
     req.user = decoded;
-
     // Continuar hacia el siguiente middleware o controlador
     next();
   } catch (error) {

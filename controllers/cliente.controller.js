@@ -7,24 +7,16 @@ const bdModel = require("../models/bd.models");
 function mapToCliente(row = {}) {
   const template = bdModel?.Cliente || {
     cliente_id: 0,
-    nombres: "",
-    apellidos: "",
-    numero_documento: "",
-    telefono: "",
-    email: "",
-    direccion: "",
+    nombre_completo: "",
+    dni: "",
     fecha_registro: ""
   };
 
   return {
     ...template,
     cliente_id: row.cliente_id ?? template.cliente_id,
-    nombres: row.nombres ?? template.nombres,
-    apellidos: row.apellidos ?? template.apellidos,
-    numero_documento: row.numero_documento ?? template.numero_documento,
-    telefono: row.telefono ?? template.telefono,
-    email: row.email ?? template.email,
-    direccion: row.direccion ?? template.direccion,
+    nombre_completo: row.nombre_completo ?? template.nombre_completo,
+    dni: row.dni ?? template.dni,
     fecha_registro: row.fecha_registro ?? template.fecha_registro
   };
 }
@@ -49,7 +41,6 @@ exports.getClientes = async (_req, res) => {
 // ==============================
 exports.getClienteById = async (req, res) => {
   const { id } = req.params;
-
   try {
     const pool = await getConnection();
     const result = await pool.request()
@@ -71,44 +62,31 @@ exports.getClienteById = async (req, res) => {
 // 📗 Crear un nuevo cliente
 // ==============================
 exports.createCliente = async (req, res) => {
-  const {
-    nombres,
-    apellidos,
-    numero_documento,
-    telefono,
-    email,
-    direccion
-  } = req.body;
+  const { nombre_completo, dni } = req.body;
 
   try {
-    if (!nombres || !apellidos || !numero_documento) {
-      return res.status(400).json({
-        error: "Los campos 'nombres', 'apellidos' y 'numero_documento' son obligatorios"
-      });
+    if (!nombre_completo || !dni) {
+      return res.status(400).json({ error: "Los campos 'nombre_completo' y 'dni' son obligatorios" });
     }
 
     const pool = await getConnection();
 
-    // Verificar si ya existe el cliente con ese número de documento
+    // Verificar si ya existe un cliente con ese DNI
     const existe = await pool.request()
-      .input("numero_documento", sql.VarChar(30), numero_documento)
-      .query("SELECT cliente_id FROM clientes WHERE numero_documento = @numero_documento");
+      .input("dni", sql.VarChar(20), dni)
+      .query("SELECT cliente_id FROM clientes WHERE dni = @dni");
 
     if (existe.recordset.length > 0) {
-      return res.status(400).json({ error: "Ya existe un cliente con ese número de documento" });
+      return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
     }
 
     await pool.request()
-      .input("nombres", sql.VarChar(200), nombres)
-      .input("apellidos", sql.VarChar(200), apellidos)
-      .input("numero_documento", sql.VarChar(30), numero_documento)
-      .input("telefono", sql.VarChar(20), telefono || "")
-      .input("email", sql.VarChar(150), email || "")
-      .input("direccion", sql.VarChar(255), direccion || "")
+      .input("nombre_completo", sql.VarChar(255), nombre_completo)
+      .input("dni", sql.VarChar(20), dni)
       .input("fecha_registro", sql.DateTime, new Date())
       .query(`
-        INSERT INTO clientes (nombres, apellidos, numero_documento, telefono, email, direccion, fecha_registro)
-        VALUES (@nombres, @apellidos, @numero_documento, @telefono, @email, @direccion, @fecha_registro)
+        INSERT INTO clientes (nombre_completo, dni, fecha_registro)
+        VALUES (@nombre_completo, @dni, @fecha_registro)
       `);
 
     return res.status(201).json({ message: "Cliente registrado correctamente" });
@@ -123,34 +101,17 @@ exports.createCliente = async (req, res) => {
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const {
-    nombres,
-    apellidos,
-    numero_documento,
-    telefono,
-    email,
-    direccion
-  } = req.body;
+  const { nombre_completo, dni } = req.body;
 
   try {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .input("nombres", sql.VarChar(200), nombres)
-      .input("apellidos", sql.VarChar(200), apellidos)
-      .input("numero_documento", sql.VarChar(30), numero_documento)
-      .input("telefono", sql.VarChar(20), telefono)
-      .input("email", sql.VarChar(150), email)
-      .input("direccion", sql.VarChar(255), direccion)
+      .input("nombre_completo", sql.VarChar(255), nombre_completo)
+      .input("dni", sql.VarChar(20), dni)
       .query(`
         UPDATE clientes
-        SET 
-          nombres = @nombres,
-          apellidos = @apellidos,
-          numero_documento = @numero_documento,
-          telefono = @telefono,
-          email = @email,
-          direccion = @direccion
+        SET nombre_completo = @nombre_completo, dni = @dni
         WHERE cliente_id = @id
       `);
 
@@ -198,7 +159,7 @@ exports.datosBoletaCliente = async (req, res) => {
     const result = await pool.request()
       .input("id", sql.Int, id)
       .query(`
-        SELECT nombres, apellidos, numero_documento, telefono, email, direccion
+        SELECT cliente_id, nombre_completo, dni, fecha_registro
         FROM clientes
         WHERE cliente_id = @id
       `);
