@@ -98,20 +98,39 @@ exports.updateTamanoPizza = async (req, res) => {
 
   try {
     const pool = await getConnection();
+    const request = pool.request();
+    request.input("id", sql.Int, id);
 
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .input("nombre_tamano", sql.VarChar(100), nombre_tamano)
-      .input("porciones", sql.VarChar(50), porciones)
-      .input("descripcion", sql.VarChar(255), descripcion)
-      .query(`
-        UPDATE tamanos_pizza
-        SET
-          nombre_tamano = @nombre_tamano,
-          porciones = @porciones,
-          descripcion = @descripcion
-        WHERE tamano_id = @id
-      `);
+    let query = "UPDATE tamanos_pizza SET";
+    let hasUpdates = false;
+
+    if (nombre_tamano !== undefined) {
+      query += " nombre_tamano = @nombre_tamano,";
+      request.input("nombre_tamano", sql.VarChar(100), nombre_tamano);
+      hasUpdates = true;
+    }
+
+    if (porciones !== undefined) {
+      query += " porciones = @porciones,";
+      request.input("porciones", sql.VarChar(50), porciones);
+      hasUpdates = true;
+    }
+
+    if (descripcion !== undefined) {
+      query += " descripcion = @descripcion,";
+      request.input("descripcion", sql.VarChar(255), descripcion);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    // Quitamos la última coma y agregamos la condición
+    query = query.slice(0, -1);
+    query += " WHERE tamano_id = @id";
+
+    const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Tamaño de pizza no encontrado" });

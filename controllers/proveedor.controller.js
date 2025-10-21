@@ -135,34 +135,70 @@ exports.updateProveedor = async (req, res) => {
 
   try {
     const pool = await getConnection();
+    const request = pool.request();
+    request.input("id", sql.Int, id);
 
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .input("nombre_proveedor", sql.VarChar(100), nombre_proveedor)
-      .input("ruc", sql.VarChar(20), ruc)
-      .input("direccion", sql.VarChar(255), direccion)
-      .input("telefono", sql.VarChar(20), telefono)
-      .input("email", sql.VarChar(100), email)
-      .input("persona_contacto", sql.VarChar(100), persona_contacto)
-      .input("estado", sql.Char(1), estado)
-      .query(`
-        UPDATE proveedores
-        SET
-          nombre_proveedor = @nombre_proveedor,
-          ruc = @ruc,
-          direccion = @direccion,
-          telefono = @telefono,
-          email = @email,
-          persona_contacto = @persona_contacto,
-          estado = @estado
-        WHERE proveedor_id = @id
-      `);
+    let query = "UPDATE proveedores SET";
+    let hasUpdates = false;
+
+    if (nombre_proveedor !== undefined) {
+      query += " nombre_proveedor = @nombre_proveedor,";
+      request.input("nombre_proveedor", sql.VarChar(100), nombre_proveedor);
+      hasUpdates = true;
+    }
+
+    if (ruc !== undefined) {
+      query += " ruc = @ruc,";
+      request.input("ruc", sql.VarChar(20), ruc);
+      hasUpdates = true;
+    }
+
+    if (direccion !== undefined) {
+      query += " direccion = @direccion,";
+      request.input("direccion", sql.VarChar(255), direccion);
+      hasUpdates = true;
+    }
+
+    if (telefono !== undefined) {
+      query += " telefono = @telefono,";
+      request.input("telefono", sql.VarChar(20), telefono);
+      hasUpdates = true;
+    }
+
+    if (email !== undefined) {
+      query += " email = @email,";
+      request.input("email", sql.VarChar(100), email);
+      hasUpdates = true;
+    }
+
+    if (persona_contacto !== undefined) {
+      query += " persona_contacto = @persona_contacto,";
+      request.input("persona_contacto", sql.VarChar(100), persona_contacto);
+      hasUpdates = true;
+    }
+
+    if (estado !== undefined) {
+      query += " estado = @estado,";
+      request.input("estado", sql.Char(1), estado);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    // Eliminar la última coma
+    query = query.slice(0, -1);
+    query += " WHERE proveedor_id = @id";
+
+    const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Proveedor no encontrado" });
     }
 
     return res.status(200).json({ message: "Proveedor actualizado correctamente" });
+
   } catch (err) {
     console.error("updateProveedor error:", err);
     return res.status(500).json({ error: "Error al actualizar el proveedor" });

@@ -9,6 +9,7 @@ function mapToCliente(row = {}) {
     cliente_id: 0,
     nombre_completo: "",
     dni: "",
+    telefono: "",
     fecha_registro: ""
   };
 
@@ -17,6 +18,7 @@ function mapToCliente(row = {}) {
     cliente_id: row.cliente_id ?? template.cliente_id,
     nombre_completo: row.nombre_completo ?? template.nombre_completo,
     dni: row.dni ?? template.dni,
+    telefono: row.telefono ?? template.telefono,
     fecha_registro: row.fecha_registro ?? template.fecha_registro
   };
 }
@@ -101,25 +103,44 @@ exports.createCliente = async (req, res) => {
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const { nombre_completo, dni } = req.body;
+  const { nombre_completo, telefono } = req.body;
 
   try {
     const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .input("nombre_completo", sql.VarChar(255), nombre_completo)
-      .input("dni", sql.VarChar(20), dni)
-      .query(`
-        UPDATE clientes
-        SET nombre_completo = @nombre_completo, dni = @dni
-        WHERE cliente_id = @id
-      `);
+
+    let query = `UPDATE clientes SET`;
+    const request = pool.request();
+    request.input("id", sql.Int, id);
+
+    let hasUpdates = false;
+
+    if (nombre_completo) {
+      query += ` nombre_completo = @nombre_completo,`;
+      request.input("nombre_completo", sql.VarChar(255), nombre_completo);
+      hasUpdates = true;
+    }
+
+    if (telefono) {
+      query += ` telefono = @telefono,`;
+      request.input("telefono", sql.VarChar(20), telefono);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    query = query.slice(0, -1);
+    query += ` WHERE cliente_id = @id`;
+
+    const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Cliente no encontrado" });
     }
 
     return res.status(200).json({ message: "Cliente actualizado correctamente" });
+
   } catch (err) {
     console.error("updateCliente error:", err);
     return res.status(500).json({ error: "Error al actualizar el cliente" });
@@ -146,34 +167,5 @@ exports.deleteCliente = async (req, res) => {
   } catch (err) {
     console.error("deleteCliente error:", err);
     return res.status(500).json({ error: "Error al eliminar el cliente" });
-  }
-};
-
-// ==============================
-// 🧾 Obtener datos para boleta
-// ==============================
-exports.datosBoletaCliente = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT cliente_id, nombre_completo, dni, fecha_registro
-        FROM clientes
-        WHERE cliente_id = @id
-      `);
-
-    if (!result.recordset.length) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
-    }
-
-    return res.status(200).json({
-      exito: true,
-      datos: mapToCliente(result.recordset[0])
-    });
-  } catch (err) {
-    console.error("datosBoletaCliente error:", err);
-    return res.status(500).json({ error: "Error al obtener datos del cliente para boleta" });
   }
 };

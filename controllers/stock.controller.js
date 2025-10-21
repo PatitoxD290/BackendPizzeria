@@ -2,6 +2,40 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
+// 🔄 Mapper: adapta una fila SQL al modelo MovimientoStock
+// ==============================
+function mapToMovimientoStock(row = {}) {
+  const template = bdModel?.MovimientoStock || {
+    movimiento_id: 0,
+    ingrediente_id: 0,
+    stock_id: 0,
+    tipo_movimiento: "",
+    cantidad: 0,
+    stock_actual: 0,
+    fecha_movimiento: "",
+    motivo: "",
+    registrado_por: "",
+    usuario_id: null,
+    estado: "A" // Estado agregado (A: Activo, I: Inactivo)
+  };
+
+  return {
+    ...template,
+    movimiento_id: row.movimiento_id ?? template.movimiento_id,
+    ingrediente_id: row.ingrediente_id ?? template.ingrediente_id,
+    stock_id: row.stock_id ?? template.stock_id,
+    tipo_movimiento: row.tipo_movimiento ?? template.tipo_movimiento,
+    cantidad: row.cantidad ?? template.cantidad,
+    stock_actual: row.stock_actual ?? template.stock_actual,
+    fecha_movimiento: row.fecha_movimiento ?? template.fecha_movimiento,
+    motivo: row.motivo ?? template.motivo,
+    registrado_por: row.registrado_por ?? template.registrado_por,
+    usuario_id: row.usuario_id ?? template.usuario_id,
+    estado: row.estado ?? template.estado
+  };
+}
+
+// ==============================
 // 🔄 Mapper: adapta una fila SQL al modelo Stock
 // ==============================
 function mapToStock(row = {}) {
@@ -15,7 +49,7 @@ function mapToStock(row = {}) {
     costo_total: 0.0,
     fecha_entrada: "",
     fecha_vencimiento: "",
-    estado: "A"
+    estado: "A" // Estado agregado (A: Activo, I: Inactivo)
   };
 
   return {
@@ -34,12 +68,155 @@ function mapToStock(row = {}) {
 }
 
 // ==============================
+// 📘 Obtener todos los movimientos de stock
+// ==============================
+exports.getMovimientosStock = async (_req, res) => {
+  try {
+    const pool = await getConnection();
+    const result = await pool.request().query(`
+      SELECT * FROM movimientos_stock WHERE estado = 'A' ORDER BY fecha_movimiento DESC
+    `);
+
+    const movimientos = (result.recordset || []).map(mapToMovimientoStock);
+    return res.status(200).json(movimientos);
+  } catch (err) {
+    console.error("getMovimientosStock error:", err);
+    return res.status(500).json({ error: "Error al obtener los movimientos de stock" });
+  }
+};
+
+// ==============================
+// 📘 Obtener un movimiento de stock por ID
+// ==============================
+exports.getMovimientoStockById = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT * FROM movimientos_stock WHERE movimiento_id = @id AND estado = 'A'");
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ error: "Movimiento no encontrado" });
+    }
+
+    return res.status(200).json(mapToMovimientoStock(result.recordset[0]));
+  } catch (err) {
+    console.error("getMovimientoStockById error:", err);
+    return res.status(500).json({ error: "Error al obtener el movimiento de stock" });
+  }
+};
+
+// ==============================
+// 📗 Crear un nuevo movimiento de stock
+// ==============================
+exports.createMovimientoStock = async (req, res) => {
+  const {
+    ingrediente_id,
+    stock_id,
+    tipo_movimiento,
+    cantidad,
+    stock_actual,
+    fecha_movimiento,
+    motivo,
+    registrado_por,
+    usuario_id
+  } = req.body;
+
+  try {
+    if (!ingrediente_id || !stock_id || !tipo_movimiento || cantidad == null) {
+      return res.status(400).json({
+        error: "Faltan campos obligatorios: ingrediente_id, stock_id, tipo_movimiento o cantidad"
+      });
+    }
+
+    const pool = await getConnection();
+
+    await pool.request()
+      .input("ingrediente_id", sql.Int, ingrediente_id)
+      .input("stock_id", sql.Int, stock_id)
+      .input("tipo_movimiento", sql.VarChar(50), tipo_movimiento)
+      .input("cantidad", sql.Int, cantidad)
+      .input("stock_actual", sql.Int, stock_actual || 0)
+      .input("fecha_movimiento", sql.DateTime, fecha_movimiento || new Date())
+      .input("motivo", sql.VarChar(255), motivo || "")
+      .input("registrado_por", sql.VarChar(100), registrado_por || "")
+      .input("usuario_id", sql.Int, usuario_id || null)
+      .query(`
+        INSERT INTO movimientos_stock (
+          ingrediente_id, stock_id, tipo_movimiento, cantidad,
+          stock_actual, fecha_movimiento, motivo, registrado_por, usuario_id, estado
+        ) VALUES (
+          @ingrediente_id, @stock_id, @tipo_movimiento, @cantidad,
+          @stock_actual, @fecha_movimiento, @motivo, @registrado_por, @usuario_id, 'A'
+        )
+      `);
+
+    // Actualizar stock si es un movimiento de entrada o salida
+    if (tipo_movimiento === 'entrada') {
+      await pool.request()
+        .input("stock_id", sql.Int, stock_id)
+        .input("cantidad", sql.Int, cantidad)
+        .query(`
+          UPDATE stock
+          SET cantidad_recibida = cantidad_recibida + @cantidad
+          WHERE stock_id = @stock_id
+        `);
+    } else if (tipo_movimiento === 'salida') {
+      await pool.request()
+        .input("stock_id", sql.Int, stock_id)
+        .input("cantidad", sql.Int, cantidad)
+        .query(`
+          UPDATE stock
+          SET cantidad_recibida = cantidad_recibida - @cantidad
+          WHERE stock_id = @stock_id
+        `);
+    }
+
+    return res.status(201).json({ message: "Movimiento de stock registrado correctamente" });
+  } catch (err) {
+    console.error("createMovimientoStock error:", err);
+    return res.status(500).json({ error: "Error al registrar el movimiento de stock" });
+  }
+};
+
+// ==============================
+// 📙 Actualizar un movimiento de stock (solo marcarlo como anulado)
+// ==============================
+exports.updateMovimientoStock = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+
+    // Marcar como "anulado" en lugar de eliminar
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`
+        UPDATE movimientos_stock
+        SET estado = 'I'
+        WHERE movimiento_id = @id
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Movimiento no encontrado" });
+    }
+
+    return res.status(200).json({ message: "Movimiento de stock anulado correctamente" });
+  } catch (err) {
+    console.error("updateMovimientoStock error:", err);
+    return res.status(500).json({ error: "Error al anular el movimiento de stock" });
+  }
+};
+
+// ==============================
 // 📘 Obtener todos los registros de stock
 // ==============================
 exports.getStocks = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM stock ORDER BY fecha_entrada DESC");
+    const result = await pool.request().query("SELECT * FROM stock WHERE estado = 'A' ORDER BY fecha_entrada DESC");
     const stocks = (result.recordset || []).map(mapToStock);
     return res.status(200).json(stocks);
   } catch (err) {
@@ -57,7 +234,7 @@ exports.getStockById = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT * FROM stock WHERE stock_id = @id");
+      .query("SELECT * FROM stock WHERE stock_id = @id AND estado = 'A'");
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Registro de stock no encontrado" });
@@ -177,24 +354,3 @@ exports.updateStock = async (req, res) => {
   }
 };
 
-// ==============================
-// 📕 Eliminar un registro de stock
-// ==============================
-exports.deleteStock = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query("DELETE FROM stock WHERE stock_id = @id");
-
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Registro de stock no encontrado" });
-    }
-
-    return res.status(200).json({ message: "Registro de stock eliminado correctamente" });
-  } catch (err) {
-    console.error("deleteStock error:", err);
-    return res.status(500).json({ error: "Error al eliminar el stock" });
-  }
-};

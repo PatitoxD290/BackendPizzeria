@@ -90,19 +90,31 @@ exports.updateCategoria = async (req, res) => {
 
   try {
     const pool = await getConnection();
-    await pool.request()
-      .input("id", sql.Int, id)
-      .input("nombre_categoria", sql.VarChar(100), nombre_categoria)
-      .input("descripcion_categoria", sql.VarChar(255), descripcion_categoria)
-      .query(`
-        UPDATE categorias
-        SET 
-          nombre_categoria = @nombre_categoria,
-          descripcion_categoria = @descripcion_categoria
-        WHERE categoria_id = @id
-      `);
+    
+    let query = `UPDATE categorias SET`;
+    
+    if (nombre_categoria) {
+      query += ` nombre_categoria = @nombre_categoria,`;
+    }
+    if (descripcion_categoria) {
+      query += ` descripcion_categoria = @descripcion_categoria,`;
+    }
 
+    if (query.endsWith(',')) {
+      query = query.slice(0, -1);
+    }
+
+    query += ` WHERE categoria_id = @id`;
+
+    const request = pool.request();
+    request.input("id", sql.Int, id);
+    if (nombre_categoria) request.input("nombre_categoria", sql.VarChar(100), nombre_categoria);
+    if (descripcion_categoria) request.input("descripcion_categoria", sql.VarChar(255), descripcion_categoria);
+
+    await request.query(query);
+    
     return res.status(200).json({ message: "Categoría actualizada exitosamente" });
+
   } catch (err) {
     console.error("updateCategoria error:", err);
     return res.status(500).json({ error: "Error al actualizar la categoría" });

@@ -1,4 +1,3 @@
-// routes/stock.routes.js
 const express = require("express");
 const router = express.Router();
 const stockController = require("../controllers/stock.controller");
@@ -8,6 +7,10 @@ router.get("/stock", verifyToken, stockController.getStocks);
 router.get("/stock/:id", verifyToken, stockController.getStockById);
 router.post("/stock", verifyToken, stockController.createStock);
 router.put("/stock/:id", verifyToken, stockController.updateStock);
-router.delete("/stock/:id", verifyToken, stockController.deleteStock);
+
+router.get("/stock/movimientos", verifyToken, stockController.getMovimientosStock);
+router.get("/stock/movimientos/:id", verifyToken, stockController.getMovimientoStockById);
+router.post("/stock/movimientos", verifyToken, stockController.createMovimientoStock);
+router.put("/stock/movimientos/:id", verifyToken, stockController.updateMovimientoStock);
 
 module.exports = router;

@@ -44,6 +44,7 @@ CREATE TABLE usuarios (
     dni VARCHAR(20) NOT NULL UNIQUE,
     password VARCHAR(255) NOT NULL,               
     nombre_completo VARCHAR(255) NOT NULL,
+    telefono VARCHAR(20) NULL,
     rol VARCHAR(50) NOT NULL CHECK (rol IN ('ADMIN','EMPLEADO')),
     estado CHAR(1) NOT NULL DEFAULT 'A',          
     fecha_registro DATETIME NOT NULL DEFAULT GETDATE()
@@ -172,6 +173,7 @@ CREATE TABLE clientes (
     cliente_id INT IDENTITY(1,1) PRIMARY KEY,
     nombre_completo VARCHAR(255) NOT NULL,
     dni VARCHAR(20) NOT NULL UNIQUE,
+    telefono VARCHAR(20) NULL,
     fecha_registro DATETIME DEFAULT GETDATE()
 );
 GO
@@ -199,7 +201,7 @@ GO
 -- ORIGEN: //14 Pedidos 
 CREATE TABLE pedidos (
     pedido_id INT IDENTITY(1,1) PRIMARY KEY,
-    cliente_id INT NOT NULL,
+    cliente_id INT NOT NULL DEFAULT 1,
     usuario_id INT NULL,                          -- NULL si es desde kiosko autoservicio
     fecha_pedido DATETIME NOT NULL DEFAULT GETDATE(),
     hora_pedido TIME NOT NULL DEFAULT CAST(GETDATE() AS TIME),

@@ -10,6 +10,7 @@ function mapToUsuario(row = {}) {
     password: "",
     nombre_completo: "",
     rol: "",
+    telefono: "",
     estado: "A",
     fecha_registro: ""
   };
@@ -64,10 +65,10 @@ exports.getUsuarioById = async (req, res) => {
 };
 
 // ==============================
-// 📗 Crear un nuevo usuario
+// 📗 Crear un nuevo usuario (con teléfono)
 // ==============================
 exports.createUsuario = async (req, res) => {
-  const { dni, password, nombre_completo, rol, estado } = req.body;
+  const { dni, password, nombre_completo, rol, estado, telefono } = req.body;
 
   try {
     if (!dni || !password || !nombre_completo || !rol) {
@@ -95,10 +96,11 @@ exports.createUsuario = async (req, res) => {
       .input("password", sql.VarChar(255), hashedPassword)
       .input("nombre_completo", sql.VarChar(200), nombre_completo)
       .input("rol", sql.VarChar(50), rol)
+      .input("telefono", sql.VarChar(20), telefono || null) // agregado telefono
       .input("estado", sql.VarChar(1), estado || "A")
       .query(`
-        INSERT INTO usuarios (dni, password, nombre_completo, rol, estado, fecha_registro)
-        VALUES (@dni, @password, @nombre_completo, @rol, @estado, GETDATE())
+        INSERT INTO usuarios (dni, password, nombre_completo, rol, telefono, estado, fecha_registro)
+        VALUES (@dni, @password, @nombre_completo, @rol, @telefono, @estado, GETDATE())
       `);
 
     res.status(201).json({ message: "Usuario creado exitosamente" });
@@ -109,26 +111,61 @@ exports.createUsuario = async (req, res) => {
 };
 
 // ==============================
-// 📙 Actualizar un usuario
+// 📙 Actualizar un usuario (solo campos permitidos, y flexible)
 // ==============================
 exports.updateUsuario = async (req, res) => {
   const { id } = req.params;
-  const { nombre_completo, rol, estado } = req.body;
+  const { nombre_completo, rol, estado, telefono, password } = req.body;
 
   try {
     const pool = await getConnection();
-    await pool.request()
-      .input("nombre_completo", sql.VarChar(200), nombre_completo)
-      .input("rol", sql.VarChar(50), rol)
-      .input("estado", sql.VarChar(1), estado)
-      .input("id", sql.Int, id)
-      .query(`
-        UPDATE usuarios
-        SET nombre_completo = @nombre_completo,
-            rol = @rol,
-            estado = @estado
-        WHERE usuario_id = @id
-      `);
+    const request = pool.request();
+    request.input("id", sql.Int, id);
+
+    let query = "UPDATE usuarios SET";
+    let hasUpdates = false;
+
+    if (nombre_completo !== undefined) {
+      query += " nombre_completo = @nombre_completo,";
+      request.input("nombre_completo", sql.VarChar(200), nombre_completo);
+      hasUpdates = true;
+    }
+    if (rol !== undefined) {
+      query += " rol = @rol,";
+      request.input("rol", sql.VarChar(50), rol);
+      hasUpdates = true;
+    }
+    if (estado !== undefined) {
+      query += " estado = @estado,";
+      request.input("estado", sql.VarChar(1), estado);
+      hasUpdates = true;
+    }
+    if (telefono !== undefined) {
+      query += " telefono = @telefono,";
+      request.input("telefono", sql.VarChar(20), telefono);
+      hasUpdates = true;
+    }
+    if (password !== undefined) {
+      // Encriptar password si se envía
+      const hashedPassword = await bcrypt.hash(password, 10);
+      query += " password = @password,";
+      request.input("password", sql.VarChar(255), hashedPassword);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    // Quitar última coma y agregar WHERE
+    query = query.slice(0, -1);
+    query += " WHERE usuario_id = @id";
+
+    const result = await request.query(query);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
 
     res.status(200).json({ message: "Usuario actualizado exitosamente" });
   } catch (err) {

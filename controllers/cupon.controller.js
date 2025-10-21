@@ -152,40 +152,88 @@ exports.updateCupon = async (req, res) => {
 
   try {
     const pool = await getConnection();
+    const request = pool.request();
+    request.input("id", sql.Int, id);
 
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .input("codigo_cupon", sql.VarChar(50), codigo_cupon)
-      .input("descripcion", sql.VarChar(255), descripcion)
-      .input("tipo_descuento", sql.VarChar(20), tipo_descuento)
-      .input("valor_descuento", sql.Decimal(10, 2), valor_descuento)
-      .input("monto_minimo", sql.Decimal(10, 2), monto_minimo)
-      .input("usos_maximos", sql.Int, usos_maximos)
-      .input("usos_actuales", sql.Int, usos_actuales)
-      .input("fecha_inicio", sql.DateTime, fecha_inicio)
-      .input("fecha_fin", sql.DateTime, fecha_fin)
-      .input("estado", sql.Char(1), estado)
-      .query(`
-        UPDATE cupones
-        SET
-          codigo_cupon = @codigo_cupon,
-          descripcion = @descripcion,
-          tipo_descuento = @tipo_descuento,
-          valor_descuento = @valor_descuento,
-          monto_minimo = @monto_minimo,
-          usos_maximos = @usos_maximos,
-          usos_actuales = @usos_actuales,
-          fecha_inicio = @fecha_inicio,
-          fecha_fin = @fecha_fin,
-          estado = @estado
-        WHERE cupon_id = @id
-      `);
+    let query = "UPDATE cupones SET";
+    let hasUpdates = false;
+
+    if (codigo_cupon !== undefined) {
+      query += " codigo_cupon = @codigo_cupon,";
+      request.input("codigo_cupon", sql.VarChar(50), codigo_cupon);
+      hasUpdates = true;
+    }
+
+    if (descripcion !== undefined) {
+      query += " descripcion = @descripcion,";
+      request.input("descripcion", sql.VarChar(255), descripcion);
+      hasUpdates = true;
+    }
+
+    if (tipo_descuento !== undefined) {
+      query += " tipo_descuento = @tipo_descuento,";
+      request.input("tipo_descuento", sql.VarChar(20), tipo_descuento);
+      hasUpdates = true;
+    }
+
+    if (valor_descuento !== undefined) {
+      query += " valor_descuento = @valor_descuento,";
+      request.input("valor_descuento", sql.Decimal(10, 2), valor_descuento);
+      hasUpdates = true;
+    }
+
+    if (monto_minimo !== undefined) {
+      query += " monto_minimo = @monto_minimo,";
+      request.input("monto_minimo", sql.Decimal(10, 2), monto_minimo);
+      hasUpdates = true;
+    }
+
+    if (usos_maximos !== undefined) {
+      query += " usos_maximos = @usos_maximos,";
+      request.input("usos_maximos", sql.Int, usos_maximos);
+      hasUpdates = true;
+    }
+
+    if (usos_actuales !== undefined) {
+      query += " usos_actuales = @usos_actuales,";
+      request.input("usos_actuales", sql.Int, usos_actuales);
+      hasUpdates = true;
+    }
+
+    if (fecha_inicio !== undefined) {
+      query += " fecha_inicio = @fecha_inicio,";
+      request.input("fecha_inicio", sql.DateTime, fecha_inicio);
+      hasUpdates = true;
+    }
+
+    if (fecha_fin !== undefined) {
+      query += " fecha_fin = @fecha_fin,";
+      request.input("fecha_fin", sql.DateTime, fecha_fin);
+      hasUpdates = true;
+    }
+
+    if (estado !== undefined) {
+      query += " estado = @estado,";
+      request.input("estado", sql.Char(1), estado);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    // Eliminar la coma final
+    query = query.slice(0, -1);
+    query += " WHERE cupon_id = @id";
+
+    const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Cupón no encontrado" });
     }
 
     return res.status(200).json({ message: "Cupón actualizado correctamente" });
+
   } catch (err) {
     console.error("updateCupon error:", err);
     return res.status(500).json({ error: "Error al actualizar el cupón" });

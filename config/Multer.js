@@ -3,44 +3,42 @@ const path = require("path");
 const fs = require("fs");
 
 // Ruta a la carpeta 'uploads' que está al mismo nivel que 'config'
-const uploadDir = path.join(__dirname, '..', 'uploads');  // Subir un nivel para acceder a 'uploads'
+const uploadDir = path.join(__dirname, '..', 'uploads');
 
-// Asegurarse de que la carpeta exista
+// Crear carpeta uploads si no existe
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir);
 }
 
-// Configuración del almacenamiento en disco
+// Configuración del almacenamiento
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    // Guardar los archivos en la carpeta 'uploads'
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    // Generar un nombre único para evitar sobreescritura
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1E9);
-    cb(null, uniqueSuffix + path.extname(file.originalname)); // Mantener la extensión original
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, uniqueSuffix + path.extname(file.originalname));
   }
 });
 
-// Función para validar el tipo de archivo (solo imágenes)
+// Filtro para solo aceptar imágenes JPG, JPEG, PNG
 const fileFilter = (req, file, cb) => {
   const fileTypes = /jpeg|jpg|png/;
   const extname = fileTypes.test(path.extname(file.originalname).toLowerCase());
   const mimeType = fileTypes.test(file.mimetype);
 
   if (extname && mimeType) {
-    return cb(null, true); // Acepta el archivo
+    cb(null, true);
   } else {
-    return cb(new Error("Solo se permiten archivos de tipo JPG, JPEG y PNG"), false); // Rechaza el archivo
+    cb(new Error("Solo se permiten archivos JPG, JPEG y PNG"), false);
   }
 };
 
-// Configuración de Multer para aceptar múltiples archivos
+// Configuración Multer, máximo 3 archivos en campo 'referencia', pero opcional
 const upload = multer({
-  storage: storage,
-  fileFilter: fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // Limitar el tamaño a 10 MB por archivo
-}).array("referencia", 3); // Aquí '5' es el número máximo de archivos
+  storage,
+  fileFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max por archivo
+}).array("referencia", 3);
 
 module.exports = upload;

@@ -112,6 +112,7 @@ const Cliente = {
   cliente_id: 0,
   nombre_completo: "",
   dni: "",
+  telefono: "",
   fecha_registro: ""
 };
 
@@ -138,6 +139,7 @@ const Usuario = {
   password: "",
   nombre_completo: "",
   rol: "", // ADMIN o EMPLEADO
+  telefono: "",
   estado: "A",
   fecha_registro: ""
 };
@@ -164,7 +166,6 @@ const DetallePedido = {
   producto_id: 0,
   tamano_id: null,
   cantidad: 0,
-  precio_unitario: 0.0,
   subtotal: 0.0,
   notas_producto: ""
 };

@@ -137,28 +137,63 @@ exports.updateIngrediente = async (req, res) => {
 
   try {
     const pool = await getConnection();
+    const request = pool.request();
+    request.input("id", sql.Int, id);
 
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .input("nombre_ingrediente", sql.VarChar(100), nombre_ingrediente)
-      .input("descripcion_ingrediente", sql.VarChar(255), descripcion_ingrediente)
-      .input("unidad_medida", sql.VarChar(50), unidad_medida)
-      .input("categoria_ingrediente", sql.VarChar(100), categoria_ingrediente)
-      .input("stock_minimo", sql.Int, stock_minimo)
-      .input("stock_maximo", sql.Int, stock_maximo)
-      .input("estado", sql.Char(1), estado)
-      .query(`
-        UPDATE ingredientes
-        SET 
-          nombre_ingrediente = @nombre_ingrediente,
-          descripcion_ingrediente = @descripcion_ingrediente,
-          unidad_medida = @unidad_medida,
-          categoria_ingrediente = @categoria_ingrediente,
-          stock_minimo = @stock_minimo,
-          stock_maximo = @stock_maximo,
-          estado = @estado
-        WHERE ingrediente_id = @id
-      `);
+    let query = "UPDATE ingredientes SET";
+    let hasUpdates = false;
+
+    if (nombre_ingrediente !== undefined) {
+      query += " nombre_ingrediente = @nombre_ingrediente,";
+      request.input("nombre_ingrediente", sql.VarChar(100), nombre_ingrediente);
+      hasUpdates = true;
+    }
+
+    if (descripcion_ingrediente !== undefined) {
+      query += " descripcion_ingrediente = @descripcion_ingrediente,";
+      request.input("descripcion_ingrediente", sql.VarChar(255), descripcion_ingrediente);
+      hasUpdates = true;
+    }
+
+    if (unidad_medida !== undefined) {
+      query += " unidad_medida = @unidad_medida,";
+      request.input("unidad_medida", sql.VarChar(50), unidad_medida);
+      hasUpdates = true;
+    }
+
+    if (categoria_ingrediente !== undefined) {
+      query += " categoria_ingrediente = @categoria_ingrediente,";
+      request.input("categoria_ingrediente", sql.VarChar(100), categoria_ingrediente);
+      hasUpdates = true;
+    }
+
+    if (stock_minimo !== undefined) {
+      query += " stock_minimo = @stock_minimo,";
+      request.input("stock_minimo", sql.Int, stock_minimo);
+      hasUpdates = true;
+    }
+
+    if (stock_maximo !== undefined) {
+      query += " stock_maximo = @stock_maximo,";
+      request.input("stock_maximo", sql.Int, stock_maximo);
+      hasUpdates = true;
+    }
+
+    if (estado !== undefined) {
+      query += " estado = @estado,";
+      request.input("estado", sql.Char(1), estado);
+      hasUpdates = true;
+    }
+
+    if (!hasUpdates) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    // Eliminar la última coma
+    query = query.slice(0, -1);
+    query += " WHERE ingrediente_id = @id";
+
+    const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Ingrediente no encontrado" });
@@ -170,6 +205,7 @@ exports.updateIngrediente = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar el ingrediente" });
   }
 };
+
 
 // ==============================
 // 📕 Eliminar un ingrediente
