@@ -39,6 +39,6 @@ const upload = multer({
   storage,
   fileFilter,
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max por archivo
-}).array("referencia", 3);
+}).array("file", 3);
 
 module.exports = upload;
