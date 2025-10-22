@@ -77,38 +77,42 @@ exports.createRecetaConDetalle = async (req, res) => {
       const requestDetalle = transaction.request();
 
       for (const det of detalles) {
-        const {
-          ingrediente_id,
-          cantidad_requerida,
-          unidad_medida,
-          descripcion_uso = "",
-        } = det;
+  const {
+    ingrediente_id,
+    cantidad_requerida,
+    unidad_medida,
+    descripcion_uso = "",
+  } = det;
 
-        if (
-          !ingrediente_id ||
-          cantidad_requerida === undefined ||
-          cantidad_requerida === null ||
-          !unidad_medida
-        ) {
-          await transaction.rollback();
-          return res.status(400).json({
-            error:
-              "Cada detalle debe tener ingrediente_id, cantidad_requerida y unidad_medida",
-          });
-        }
+  if (
+    !ingrediente_id ||
+    cantidad_requerida === undefined ||
+    cantidad_requerida === null ||
+    !unidad_medida
+  ) {
+    await transaction.rollback();
+    return res.status(400).json({
+      error:
+        "Cada detalle debe tener ingrediente_id, cantidad_requerida y unidad_medida",
+    });
+  }
 
-        await requestDetalle
-          .input("receta_id", sql.Int, receta_id)
-          .input("ingrediente_id", sql.Int, ingrediente_id)
-          .input("cantidad_requerida", sql.Decimal(10, 2), cantidad_requerida)
-          .input("unidad_medida", sql.VarChar(50), unidad_medida)
-          .input("descripcion_uso", sql.VarChar(255), descripcion_uso)
-          .query(
-            `INSERT INTO detalle_recetas
-            (receta_id, ingrediente_id, cantidad_requerida, unidad_medida, descripcion_uso)
-            VALUES (@receta_id, @ingrediente_id, @cantidad_requerida, @unidad_medida, @descripcion_uso)`
-          );
-      }
+  // ✅ Crear nueva request por cada detalle
+  const requestDetalle = transaction.request();
+
+  await requestDetalle
+    .input("receta_id", sql.Int, receta_id)
+    .input("ingrediente_id", sql.Int, ingrediente_id)
+    .input("cantidad_requerida", sql.Decimal(10, 2), cantidad_requerida)
+    .input("unidad_medida", sql.VarChar(50), unidad_medida)
+    .input("descripcion_uso", sql.VarChar(255), descripcion_uso)
+    .query(`
+      INSERT INTO detalle_recetas
+      (receta_id, ingrediente_id, cantidad_requerida, unidad_medida, descripcion_uso)
+      VALUES (@receta_id, @ingrediente_id, @cantidad_requerida, @unidad_medida, @descripcion_uso)
+    `);
+}
+
 
       await transaction.commit();
 
@@ -257,39 +261,29 @@ exports.updateReceta = async (req, res) => {
 
         // Insertar nuevos detalles
         const requestDetalle = transaction.request();
-        for (const det of detalles) {
-          const {
-            ingrediente_id,
-            cantidad_requerida,
-            unidad_medida,
-            descripcion_uso = "",
-          } = det;
+        // Insertar nuevos detalles
+for (const det of detalles) {
+  const requestDetalle = transaction.request(); // ✅ nueva request por cada insert
+  const {
+    ingrediente_id,
+    cantidad_requerida,
+    unidad_medida,
+    descripcion_uso = "",
+  } = det;
 
-          if (
-            !ingrediente_id ||
-            cantidad_requerida === undefined ||
-            cantidad_requerida === null ||
-            !unidad_medida
-          ) {
-            await transaction.rollback();
-            return res.status(400).json({
-              error:
-                "Cada detalle debe tener ingrediente_id, cantidad_requerida y unidad_medida",
-            });
-          }
+  await requestDetalle
+    .input("receta_id", sql.Int, id)
+    .input("ingrediente_id", sql.Int, ingrediente_id)
+    .input("cantidad_requerida", sql.Decimal(10, 2), cantidad_requerida)
+    .input("unidad_medida", sql.VarChar(50), unidad_medida)
+    .input("descripcion_uso", sql.VarChar(255), descripcion_uso)
+    .query(`
+      INSERT INTO detalle_recetas
+      (receta_id, ingrediente_id, cantidad_requerida, unidad_medida, descripcion_uso)
+      VALUES (@receta_id, @ingrediente_id, @cantidad_requerida, @unidad_medida, @descripcion_uso)
+    `);
+}
 
-          await requestDetalle
-            .input("receta_id", sql.Int, id)
-            .input("ingrediente_id", sql.Int, ingrediente_id)
-            .input("cantidad_requerida", sql.Decimal(10, 2), cantidad_requerida)
-            .input("unidad_medida", sql.VarChar(50), unidad_medida)
-            .input("descripcion_uso", sql.VarChar(255), descripcion_uso)
-            .query(
-              `INSERT INTO detalle_recetas
-              (receta_id, ingrediente_id, cantidad_requerida, unidad_medida, descripcion_uso)
-              VALUES (@receta_id, @ingrediente_id, @cantidad_requerida, @unidad_medida, @descripcion_uso)`
-            );
-        }
       }
 
       await transaction.commit();
@@ -303,6 +297,47 @@ exports.updateReceta = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar la receta" });
   }
 };
+
+// ==============================
+// 📘 Obtener detalles por ID de receta (solo detalles)
+// ==============================
+exports.getDetallesPorReceta = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+    const query = `
+      SELECT 
+        dr.detalle_receta_id,
+        dr.receta_id,
+        dr.ingrediente_id,
+        i.nombre_ingrediente,
+        dr.cantidad_requerida,
+        dr.unidad_medida,
+        dr.descripcion_uso
+      FROM detalle_recetas dr
+      INNER JOIN ingredientes i ON dr.ingrediente_id = i.ingrediente_id
+      WHERE dr.receta_id = @id
+      ORDER BY dr.detalle_receta_id ASC
+    `;
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(query);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ message: "No se encontraron detalles para esta receta" });
+    }
+
+    const detalles = result.recordset.map(mapToDetalleReceta);
+
+    return res.status(200).json(detalles);
+  } catch (err) {
+    console.error("getDetallesPorReceta error:", err);
+    return res.status(500).json({ error: "Error al obtener los detalles de la receta" });
+  }
+};
+
 
 // ==============================
 // 📕 Eliminar receta y detalles

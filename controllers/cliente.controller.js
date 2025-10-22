@@ -64,9 +64,10 @@ exports.getClienteById = async (req, res) => {
 // 📗 Crear un nuevo cliente
 // ==============================
 exports.createCliente = async (req, res) => {
-  const { nombre_completo, dni } = req.body;
+  const { nombre_completo, dni, telefono } = req.body;
 
   try {
+    // Validar campos obligatorios
     if (!nombre_completo || !dni) {
       return res.status(400).json({ error: "Los campos 'nombre_completo' y 'dni' son obligatorios" });
     }
@@ -82,14 +83,22 @@ exports.createCliente = async (req, res) => {
       return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
     }
 
-    await pool.request()
+    // 📌 Si 'telefono' no se envía, se inserta como NULL
+    const request = pool.request()
       .input("nombre_completo", sql.VarChar(255), nombre_completo)
       .input("dni", sql.VarChar(20), dni)
-      .input("fecha_registro", sql.DateTime, new Date())
-      .query(`
-        INSERT INTO clientes (nombre_completo, dni, fecha_registro)
-        VALUES (@nombre_completo, @dni, @fecha_registro)
-      `);
+      .input("fecha_registro", sql.DateTime, new Date());
+
+    if (telefono && telefono.trim() !== "") {
+      request.input("telefono", sql.VarChar(20), telefono);
+    } else {
+      request.input("telefono", sql.VarChar(20), null);
+    }
+
+    await request.query(`
+      INSERT INTO clientes (nombre_completo, dni, telefono, fecha_registro)
+      VALUES (@nombre_completo, @dni, @telefono, @fecha_registro)
+    `);
 
     return res.status(201).json({ message: "Cliente registrado correctamente" });
   } catch (err) {
@@ -120,9 +129,10 @@ exports.updateCliente = async (req, res) => {
       hasUpdates = true;
     }
 
-    if (telefono) {
+    // 📌 teléfono puede venir vacío o eliminarse
+    if (telefono !== undefined) {
       query += ` telefono = @telefono,`;
-      request.input("telefono", sql.VarChar(20), telefono);
+      request.input("telefono", sql.VarChar(20), telefono?.trim() || null);
       hasUpdates = true;
     }
 
@@ -130,7 +140,7 @@ exports.updateCliente = async (req, res) => {
       return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
     }
 
-    query = query.slice(0, -1);
+    query = query.slice(0, -1); // quitar la coma final
     query += ` WHERE cliente_id = @id`;
 
     const result = await request.query(query);
