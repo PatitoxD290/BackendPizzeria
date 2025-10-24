@@ -51,6 +51,18 @@ CREATE TABLE usuarios (
 );
 GO
 
+INSERT INTO usuarios (dni, password, nombre_completo, telefono, rol, estado)
+VALUES (
+    '73069140',
+    '$2b$10$KL9cyx.B1nJVZMERiyP7H.Ve7h04HzmnjJu3FqA5CVS2m/7JWPlG6',
+    'Admin',
+    '',
+    'ADMIN',
+    'A'
+);
+GO
+
+
 -- ORIGEN: //5 Ingredientes 
 CREATE TABLE ingredientes (
     ingrediente_id INT IDENTITY(1,1) PRIMARY KEY,
@@ -172,11 +184,38 @@ GO
 CREATE TABLE clientes (
     cliente_id INT IDENTITY(1,1) PRIMARY KEY,
     nombre_completo VARCHAR(255) NOT NULL,
-    dni VARCHAR(20) NOT NULL UNIQUE,
+    dni VARCHAR(20) NULL,
     telefono VARCHAR(20) NULL,
     fecha_registro DATETIME DEFAULT GETDATE()
 );
 GO
+
+-- Crear un índice único solo para DNIs no nulos
+CREATE UNIQUE INDEX UQ_Clientes_DNI
+ON clientes(dni)
+WHERE dni IS NOT NULL;
+GO
+
+-- ==========================================
+-- 💾 Crear cliente por defecto: Clientes Varios
+-- ==========================================
+IF NOT EXISTS (SELECT 1 FROM clientes WHERE cliente_id = 1)
+BEGIN
+    SET IDENTITY_INSERT clientes ON;
+
+    INSERT INTO clientes (cliente_id, nombre_completo, dni, telefono, fecha_registro)
+    VALUES (1, 'Clientes Varios', NULL, NULL, GETDATE());
+
+    SET IDENTITY_INSERT clientes OFF;
+
+    PRINT '✅ Cliente "Clientes Varios" creado correctamente con ID 1.';
+END
+ELSE
+BEGIN
+    PRINT 'ℹ️ El cliente "Clientes Varios" ya existe.';
+END;
+GO
+
 
 -- ORIGEN: //13 Cupones
 CREATE TABLE cupones (

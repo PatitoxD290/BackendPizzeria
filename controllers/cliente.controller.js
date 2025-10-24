@@ -2,14 +2,14 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
-// 🔄 Mapper: adapta una fila de BD al modelo Cliente
+// 🔄 Mapper
 // ==============================
 function mapToCliente(row = {}) {
   const template = bdModel?.Cliente || {
     cliente_id: 0,
     nombre_completo: "",
-    dni: "",
-    telefono: "",
+    dni: null,
+    telefono: null,
     fecha_registro: ""
   };
 
@@ -39,7 +39,7 @@ exports.getClientes = async (_req, res) => {
 };
 
 // ==============================
-// 📘 Obtener un cliente por ID
+// 📘 Obtener cliente por ID
 // ==============================
 exports.getClienteById = async (req, res) => {
   const { id } = req.params;
@@ -61,39 +61,45 @@ exports.getClienteById = async (req, res) => {
 };
 
 // ==============================
-// 📗 Crear un nuevo cliente
+// 📗 Crear nuevo cliente
 // ==============================
 exports.createCliente = async (req, res) => {
   const { nombre_completo, dni, telefono } = req.body;
 
   try {
-    // Validar campos obligatorios
-    if (!nombre_completo || !dni) {
-      return res.status(400).json({ error: "Los campos 'nombre_completo' y 'dni' son obligatorios" });
+    // 🔹 Validar nombre obligatorio
+    if (!nombre_completo || !nombre_completo.trim()) {
+      return res.status(400).json({ error: "El nombre completo es obligatorio" });
     }
 
     const pool = await getConnection();
 
-    // Verificar si ya existe un cliente con ese DNI
-    const existe = await pool.request()
-      .input("dni", sql.VarChar(20), dni)
-      .query("SELECT cliente_id FROM clientes WHERE dni = @dni");
-
-    if (existe.recordset.length > 0) {
-      return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
+    // 🚫 Evitar crear otro "Clientes Varios"
+    if (nombre_completo.trim().toLowerCase() === "clientes varios") {
+      return res.status(400).json({ error: "El cliente 'Clientes Varios' ya existe y no puede duplicarse" });
     }
 
-    // 📌 Si 'telefono' no se envía, se inserta como NULL
     const request = pool.request()
-      .input("nombre_completo", sql.VarChar(255), nombre_completo)
-      .input("dni", sql.VarChar(20), dni)
+      .input("nombre_completo", sql.VarChar(255), nombre_completo.trim())
       .input("fecha_registro", sql.DateTime, new Date());
 
-    if (telefono && telefono.trim() !== "") {
-      request.input("telefono", sql.VarChar(20), telefono);
+    // 🔹 Manejar dni opcional y único
+    if (dni && dni.trim() !== "") {
+      const dniExistente = await pool.request()
+        .input("dni", sql.VarChar(20), dni.trim())
+        .query("SELECT cliente_id FROM clientes WHERE dni = @dni");
+
+      if (dniExistente.recordset.length > 0) {
+        return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
+      }
+
+      request.input("dni", sql.VarChar(20), dni.trim());
     } else {
-      request.input("telefono", sql.VarChar(20), null);
+      request.input("dni", sql.VarChar(20), null);
     }
+
+    // 🔹 Teléfono opcional
+    request.input("telefono", sql.VarChar(20), telefono?.trim() || null);
 
     await request.query(`
       INSERT INTO clientes (nombre_completo, dni, telefono, fecha_registro)
@@ -103,24 +109,28 @@ exports.createCliente = async (req, res) => {
     return res.status(201).json({ message: "Cliente registrado correctamente" });
   } catch (err) {
     console.error("createCliente error:", err);
-    return res.status(500).json({ error: "Error al registrar el cliente" });
+    return res.status(500).json({ error: err.message });
   }
 };
+
 
 // ==============================
 // 📙 Actualizar cliente
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const { nombre_completo, telefono } = req.body;
+  const { nombre_completo, telefono, dni } = req.body;
 
   try {
-    const pool = await getConnection();
+    if (parseInt(id) === 1) {
+      return res.status(400).json({ error: "El cliente 'Clientes Varios' no puede modificarse" });
+    }
 
-    let query = `UPDATE clientes SET`;
+    const pool = await getConnection();
     const request = pool.request();
     request.input("id", sql.Int, id);
 
+    let query = `UPDATE clientes SET`;
     let hasUpdates = false;
 
     if (nombre_completo) {
@@ -129,7 +139,26 @@ exports.updateCliente = async (req, res) => {
       hasUpdates = true;
     }
 
-    // 📌 teléfono puede venir vacío o eliminarse
+    if (dni !== undefined) {
+      if (dni && dni.trim() !== "") {
+        const existe = await pool.request()
+          .input("dni", sql.VarChar(20), dni)
+          .input("id", sql.Int, id)
+          .query("SELECT cliente_id FROM clientes WHERE dni = @dni AND cliente_id <> @id");
+
+        if (existe.recordset.length > 0) {
+          return res.status(400).json({ error: "El DNI ingresado ya está registrado por otro cliente" });
+        }
+
+        query += ` dni = @dni,`;
+        request.input("dni", sql.VarChar(20), dni);
+      } else {
+        query += ` dni = @dni,`;
+        request.input("dni", sql.VarChar(20), null);
+      }
+      hasUpdates = true;
+    }
+
     if (telefono !== undefined) {
       query += ` telefono = @telefono,`;
       request.input("telefono", sql.VarChar(20), telefono?.trim() || null);
@@ -140,7 +169,7 @@ exports.updateCliente = async (req, res) => {
       return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
     }
 
-    query = query.slice(0, -1); // quitar la coma final
+    query = query.slice(0, -1);
     query += ` WHERE cliente_id = @id`;
 
     const result = await request.query(query);
@@ -150,7 +179,6 @@ exports.updateCliente = async (req, res) => {
     }
 
     return res.status(200).json({ message: "Cliente actualizado correctamente" });
-
   } catch (err) {
     console.error("updateCliente error:", err);
     return res.status(500).json({ error: "Error al actualizar el cliente" });
@@ -164,6 +192,10 @@ exports.deleteCliente = async (req, res) => {
   const { id } = req.params;
 
   try {
+    if (parseInt(id) === 1) {
+      return res.status(400).json({ error: "El cliente 'Clientes Varios' no puede eliminarse" });
+    }
+
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)

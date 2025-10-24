@@ -111,8 +111,8 @@ const MovimientoStock = {
 const Cliente = {
   cliente_id: 0,
   nombre_completo: "",
-  dni: "",
-  telefono: "",
+  dni: null,
+  telefono: null,
   fecha_registro: ""
 };
 
@@ -146,28 +146,29 @@ const Usuario = {
 
 // 13. Pedido (cabecera)
 const Pedido = {
-  pedido_id: 0,
-  cliente_id: 0,
-  usuario_id: null,
-  fecha_pedido: "",
-  hora_pedido: "",
-  estado_pedido: "PENDIENTE",
-  subtotal: 0.0,
-  monto_descuento: 0.0,
-  total: 0.0,
-  notas_generales: "",
-  fecha_registro: ""
+  pedido_id: 0,                // INT IDENTITY(1,1)
+  cliente_id: 1,               // INT NOT NULL DEFAULT 1
+  usuario_id: null,            // INT NULL
+  fecha_pedido: "",            // DATETIME DEFAULT GETDATE()
+  hora_pedido: "",             // TIME DEFAULT CAST(GETDATE() AS TIME)
+  estado_pedido: "PENDIENTE",  // VARCHAR(20) CHECK (...)
+  subtotal: 0.0,               // DECIMAL(12,2) NULL
+  monto_descuento: 0.0,        // DECIMAL(12,2) DEFAULT 0
+  total: 0.0,                  // DECIMAL(12,2) NULL
+  notas_generales: "",         // TEXT NULL
+  fecha_registro: ""           // DATETIME DEFAULT GETDATE()
 };
 
 // 14. Detalle de Pedido
 const DetallePedido = {
-  detalle_pedido_id: 0,
-  pedido_id: 0,
-  producto_id: 0,
-  tamano_id: null,
-  cantidad: 0,
-  subtotal: 0.0,
-  notas_producto: ""
+  detalle_pedido_id: 0,        // INT IDENTITY(1,1)
+  pedido_id: 0,                // INT NOT NULL
+  producto_id: 0,              // INT NOT NULL
+  tamano_id: null,             // INT NULL
+  cantidad: 1,                 // INT NOT NULL CHECK (cantidad > 0)
+  precio_unitario: 0.0,        // DECIMAL(10,2) NOT NULL
+  subtotal: 0.0,               // DECIMAL(12,2) NOT NULL
+  notas_producto: ""           // TEXT NULL
 };
 
 // 15. Venta

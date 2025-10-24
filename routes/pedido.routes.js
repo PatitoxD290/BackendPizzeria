@@ -7,6 +7,8 @@ const { verifyToken } = require("../middlewares/auth.middleware");
 router.get("/pedidos", verifyToken, pedidoController.getPedidos); 
 router.get("/pedidos/:pedido_id", verifyToken, pedidoController.getDetallesConNotas); 
 router.post("/pedidos", verifyToken, pedidoController.createPedidoConDetalle); 
-router.put("/pedidos/:id", verifyToken, pedidoController.updatePedidoConDetalle); 
+router.put("/pedidos/:id", verifyToken, pedidoController.updatePedidoConDetalle);
+router.delete("/pedidos/:id", verifyToken, pedidoController.deletePedidoConDetalles);
+
 
 module.exports = router;

@@ -1,7 +1,9 @@
 const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
-// Mapper Pedido
+// ==============================
+// 🔄 Mapper Pedido
+// ==============================
 function mapToPedido(row = {}) {
   const template = bdModel?.Pedido || {
     pedido_id: 0,
@@ -33,7 +35,9 @@ function mapToPedido(row = {}) {
   };
 }
 
-// Mapper DetallePedido
+// ==============================
+// 🔄 Mapper Detalle Pedido
+// ==============================
 function mapToDetallePedido(row = {}) {
   const template = bdModel?.DetallePedido || {
     detalle_pedido_id: 0,
@@ -59,7 +63,9 @@ function mapToDetallePedido(row = {}) {
   };
 }
 
-// Crear pedido con detalle
+// ==============================
+// 📗 Crear pedido con detalle
+// ==============================
 exports.createPedidoConDetalle = async (req, res) => {
   const {
     cliente_id,
@@ -71,35 +77,38 @@ exports.createPedidoConDetalle = async (req, res) => {
     monto_descuento,
     total,
     notas_generales,
-    detalles // Array con los detalles [{ producto_id, tamano_id, cantidad, precio_unitario, subtotal, notas_producto }]
+    detalles // Array de objetos con datos de detalle
   } = req.body;
 
   try {
-    // Si cliente_id está vacío o no existe, se asigna 1
-    const cliente = cliente_id && cliente_id !== "" ? cliente_id : 1;
-
     if (!detalles || !Array.isArray(detalles) || detalles.length === 0) {
       return res.status(400).json({ error: "Debe enviar al menos un detalle de pedido" });
     }
 
     if (subtotal == null || total == null) {
-      return res.status(400).json({ error: "Faltan campos obligatorios: subtotal o total" });
+      return res.status(400).json({ error: "Debe especificar subtotal y total" });
     }
 
     const pool = await getConnection();
-
-    // Inicio de transacción para garantizar atomicidad
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {
-      // Insertar pedido
+      // ==============================
+      // 🧩 Lógica especial cliente / usuario
+      // ==============================
+      const clienteFinal = cliente_id && cliente_id !== "" ? cliente_id : 1; // Si no se envía, se usa id=1 ("Clientes Varios")
+      const usuarioFinal = usuario_id && usuario_id !== "" ? usuario_id : null; // Si no está logueado, null
+
+      // ==============================
+      // 💾 Insertar Pedido
+      // ==============================
       const requestPedido = new sql.Request(transaction);
-      await requestPedido
-        .input("cliente_id", sql.Int, cliente)
-        .input("usuario_id", sql.Int, usuario_id || null)
-        .input("fecha_pedido", sql.Date, fecha_pedido || new Date())
-        .input("hora_pedido", sql.VarChar(20), hora_pedido || new Date().toLocaleTimeString())
+      const resultPedido = await requestPedido
+        .input("cliente_id", sql.Int, clienteFinal)
+        .input("usuario_id", sql.Int, usuarioFinal)
+        .input("fecha_pedido", sql.Date, new Date().toISOString().split('T')[0])
+        .input("hora_pedido", sql.VarChar(20), new Date().toLocaleTimeString("es-PE", { hour12: false }))
         .input("estado_pedido", sql.VarChar(50), estado_pedido || "PENDIENTE")
         .input("subtotal", sql.Decimal(10, 2), subtotal)
         .input("monto_descuento", sql.Decimal(10, 2), monto_descuento || 0.0)
@@ -111,7 +120,8 @@ exports.createPedidoConDetalle = async (req, res) => {
             cliente_id, usuario_id, fecha_pedido, hora_pedido,
             estado_pedido, subtotal, monto_descuento, total,
             notas_generales, fecha_registro
-          ) VALUES (
+          )
+          VALUES (
             @cliente_id, @usuario_id, @fecha_pedido, @hora_pedido,
             @estado_pedido, @subtotal, @monto_descuento, @total,
             @notas_generales, @fecha_registro
@@ -119,15 +129,16 @@ exports.createPedidoConDetalle = async (req, res) => {
           SELECT SCOPE_IDENTITY() AS pedido_id;
         `);
 
-      // Obtener el pedido_id insertado
-      const pedido_id = requestPedido.parameters.pedido_id || (await requestPedido.query("SELECT SCOPE_IDENTITY() AS pedido_id")).recordset[0].pedido_id;
+      const pedido_id = resultPedido.recordset[0]?.pedido_id;
 
       if (!pedido_id) {
         await transaction.rollback();
-        return res.status(500).json({ error: "No se pudo obtener el ID del pedido creado" });
+        return res.status(500).json({ error: "Error al crear el pedido (no se obtuvo ID)" });
       }
 
-      // Insertar cada detalle
+      // ==============================
+      // 💾 Insertar Detalles
+      // ==============================
       for (const detalle of detalles) {
         const {
           producto_id,
@@ -141,7 +152,7 @@ exports.createPedidoConDetalle = async (req, res) => {
         if (!producto_id || cantidad == null || precio_unitario == null) {
           await transaction.rollback();
           return res.status(400).json({
-            error: "Faltan campos obligatorios en detalle: producto_id, cantidad o precio_unitario"
+            error: "Cada detalle debe tener producto_id, cantidad y precio_unitario"
           });
         }
 
@@ -152,34 +163,39 @@ exports.createPedidoConDetalle = async (req, res) => {
           .input("tamano_id", sql.Int, tamano_id || null)
           .input("cantidad", sql.Int, cantidad)
           .input("precio_unitario", sql.Decimal(10, 2), precio_unitario)
-          .input("subtotal", sql.Decimal(10, 2), subtotalDetalle || (cantidad * precio_unitario))
+          .input("subtotal", sql.Decimal(10, 2), subtotalDetalle || cantidad * precio_unitario)
           .input("notas_producto", sql.VarChar(255), notas_producto || "")
           .query(`
             INSERT INTO detalle_pedidos (
               pedido_id, producto_id, tamano_id,
               cantidad, precio_unitario, subtotal, notas_producto
-            ) VALUES (
+            )
+            VALUES (
               @pedido_id, @producto_id, @tamano_id,
               @cantidad, @precio_unitario, @subtotal, @notas_producto
-            )
+            );
           `);
       }
 
       await transaction.commit();
 
-      return res.status(201).json({ message: "Pedido y detalles registrados correctamente", pedido_id });
+      return res.status(201).json({
+        message: "✅ Pedido y detalles registrados correctamente",
+        pedido_id
+      });
 
     } catch (err) {
       await transaction.rollback();
-      console.error("createPedidoConDetalle transaction error:", err);
+      console.error("❌ Error en transacción createPedidoConDetalle:", err);
       return res.status(500).json({ error: "Error al registrar el pedido con detalles" });
     }
 
   } catch (err) {
-    console.error("createPedidoConDetalle error:", err);
-    return res.status(500).json({ error: "Error al registrar el pedido" });
+    console.error("❌ Error general createPedidoConDetalle:", err);
+    return res.status(500).json({ error: "Error interno al registrar el pedido" });
   }
 };
+
 
 // Listar pedidos FIFO (por fecha_pedido ASC)
 exports.getPedidos = async (_req, res) => {
@@ -228,7 +244,8 @@ exports.getDetallesConNotas = async (req, res) => {
     let productosMap = {};
     if (productoIds.length) {
       const productosResult = await pool.request()
-        .query(`SELECT producto_id, nombre FROM productos WHERE producto_id IN (${productoIds.join(",")})`);
+  .query(`SELECT producto_id, nombre_producto AS nombre FROM productos WHERE producto_id IN (${productoIds.join(",")})`);
+
       productosMap = productosResult.recordset.reduce((acc, p) => {
         acc[p.producto_id] = p.nombre;
         return acc;
@@ -252,6 +269,9 @@ exports.getDetallesConNotas = async (req, res) => {
 };
 
 // Modificar pedido y detalles (parcial o total)
+// ==============================
+// 📘 Actualizar pedido con detalles
+// ==============================
 exports.updatePedidoConDetalle = async (req, res) => {
   const { id } = req.params;
   const {
@@ -262,50 +282,80 @@ exports.updatePedidoConDetalle = async (req, res) => {
     monto_descuento,
     total,
     notas_generales,
-    detalles // Array con detalles a modificar [{ detalle_pedido_id, producto_id, tamano_id, cantidad, precio_unitario, subtotal, notas_producto }]
+    detalles // Array con detalles a modificar
   } = req.body;
 
   try {
     const pool = await getConnection();
-
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {
-      // Actualizar pedido (solo campos que llegan)
+      // ==============================
+      // 🧩 Ajuste de lógica cliente/usuario
+      // ==============================
+      const clienteFinal = cliente_id && cliente_id !== "" ? cliente_id : 1; // si no hay cliente, asigna id=1 ("Clientes Varios")
+      const usuarioFinal = usuario_id && usuario_id !== "" ? usuario_id : null; // si no hay usuario logueado, null
+
+      // ==============================
+      // 💾 Actualizar Pedido (solo campos enviados)
+      // ==============================
       const requestPedido = new sql.Request(transaction);
 
-      // Crear query dinámico para actualización parcial
       let updateFields = [];
-      if (cliente_id !== undefined) updateFields.push("cliente_id = @cliente_id");
-      if (usuario_id !== undefined) updateFields.push("usuario_id = @usuario_id");
-      if (estado_pedido !== undefined) updateFields.push("estado_pedido = @estado_pedido");
-      if (subtotal !== undefined) updateFields.push("subtotal = @subtotal");
-      if (monto_descuento !== undefined) updateFields.push("monto_descuento = @monto_descuento");
-      if (total !== undefined) updateFields.push("total = @total");
-      if (notas_generales !== undefined) updateFields.push("notas_generales = @notas_generales");
 
+      // Inputs y campos dinámicos
+      requestPedido.input("id", sql.Int, id);
+
+      if (cliente_id !== undefined) {
+        updateFields.push("cliente_id = @cliente_id");
+        requestPedido.input("cliente_id", sql.Int, clienteFinal);
+      }
+
+      if (usuario_id !== undefined) {
+        updateFields.push("usuario_id = @usuario_id");
+        requestPedido.input("usuario_id", sql.Int, usuarioFinal);
+      }
+
+      if (estado_pedido !== undefined) {
+        updateFields.push("estado_pedido = @estado_pedido");
+        requestPedido.input("estado_pedido", sql.VarChar(50), estado_pedido);
+      }
+
+      if (subtotal !== undefined) {
+        updateFields.push("subtotal = @subtotal");
+        requestPedido.input("subtotal", sql.Decimal(10, 2), subtotal);
+      }
+
+      if (monto_descuento !== undefined) {
+        updateFields.push("monto_descuento = @monto_descuento");
+        requestPedido.input("monto_descuento", sql.Decimal(10, 2), monto_descuento);
+      }
+
+      if (total !== undefined) {
+        updateFields.push("total = @total");
+        requestPedido.input("total", sql.Decimal(10, 2), total);
+      }
+
+      if (notas_generales !== undefined) {
+        updateFields.push("notas_generales = @notas_generales");
+        requestPedido.input("notas_generales", sql.VarChar(255), notas_generales);
+      }
+
+      // Ejecutar actualización si hay campos
       if (updateFields.length > 0) {
-        requestPedido.input("id", sql.Int, id);
+        const queryUpdate = `UPDATE pedidos SET ${updateFields.join(", ")} WHERE pedido_id = @id`;
+        const result = await requestPedido.query(queryUpdate);
 
-        if (cliente_id !== undefined) requestPedido.input("cliente_id", sql.Int, cliente_id);
-        if (usuario_id !== undefined) requestPedido.input("usuario_id", sql.Int, usuario_id);
-        if (estado_pedido !== undefined) requestPedido.input("estado_pedido", sql.VarChar(50), estado_pedido);
-        if (subtotal !== undefined) requestPedido.input("subtotal", sql.Decimal(10, 2), subtotal);
-        if (monto_descuento !== undefined) requestPedido.input("monto_descuento", sql.Decimal(10, 2), monto_descuento);
-        if (total !== undefined) requestPedido.input("total", sql.Decimal(10, 2), total);
-        if (notas_generales !== undefined) requestPedido.input("notas_generales", sql.VarChar(255), notas_generales);
-
-        const queryUpdatePedido = `UPDATE pedidos SET ${updateFields.join(", ")} WHERE pedido_id = @id`;
-        const resultPedido = await requestPedido.query(queryUpdatePedido);
-
-        if (resultPedido.rowsAffected[0] === 0) {
+        if (result.rowsAffected[0] === 0) {
           await transaction.rollback();
           return res.status(404).json({ error: "Pedido no encontrado" });
         }
       }
 
-      // Actualizar detalles si vienen
+      // ==============================
+      // 💾 Actualizar Detalles (si vienen)
+      // ==============================
       if (detalles && Array.isArray(detalles)) {
         for (const detalle of detalles) {
           const {
@@ -314,58 +364,113 @@ exports.updatePedidoConDetalle = async (req, res) => {
             tamano_id,
             cantidad,
             precio_unitario,
-            subtotal,
+            subtotal: subtotalDetalle,
             notas_producto
           } = detalle;
 
           if (!detalle_pedido_id) {
             await transaction.rollback();
-            return res.status(400).json({ error: "Falta detalle_pedido_id en detalles" });
+            return res.status(400).json({ error: "Cada detalle debe tener detalle_pedido_id" });
           }
 
-          // Campos a actualizar dinámicamente
-          let updateFieldsDetalle = [];
-          if (producto_id !== undefined) updateFieldsDetalle.push("producto_id = @producto_id");
-          if (tamano_id !== undefined) updateFieldsDetalle.push("tamano_id = @tamano_id");
-          if (cantidad !== undefined) updateFieldsDetalle.push("cantidad = @cantidad");
-          if (precio_unitario !== undefined) updateFieldsDetalle.push("precio_unitario = @precio_unitario");
-          if (subtotal !== undefined) updateFieldsDetalle.push("subtotal = @subtotal");
-          if (notas_producto !== undefined) updateFieldsDetalle.push("notas_producto = @notas_producto");
-
-          if (updateFieldsDetalle.length === 0) continue; // No hay campos para actualizar en este detalle
-
           const requestDetalle = new sql.Request(transaction);
-          requestDetalle.input("id", sql.Int, detalle_pedido_id);
+          requestDetalle.input("detalle_pedido_id", sql.Int, detalle_pedido_id);
 
-          if (producto_id !== undefined) requestDetalle.input("producto_id", sql.Int, producto_id);
-          if (tamano_id !== undefined) requestDetalle.input("tamano_id", sql.Int, tamano_id);
-          if (cantidad !== undefined) requestDetalle.input("cantidad", sql.Int, cantidad);
-          if (precio_unitario !== undefined) requestDetalle.input("precio_unitario", sql.Decimal(10, 2), precio_unitario);
-          if (subtotal !== undefined) requestDetalle.input("subtotal", sql.Decimal(10, 2), subtotal);
-          if (notas_producto !== undefined) requestDetalle.input("notas_producto", sql.VarChar(255), notas_producto);
+          let updateFieldsDetalle = [];
 
-          const queryUpdateDetalle = `UPDATE detalle_pedidos SET ${updateFieldsDetalle.join(", ")} WHERE detalle_pedido_id = @id`;
-          const resultDetalle = await requestDetalle.query(queryUpdateDetalle);
+          if (producto_id !== undefined) {
+            updateFieldsDetalle.push("producto_id = @producto_id");
+            requestDetalle.input("producto_id", sql.Int, producto_id);
+          }
 
-          if (resultDetalle.rowsAffected[0] === 0) {
-            await transaction.rollback();
-            return res.status(404).json({ error: `Detalle de pedido no encontrado: ${detalle_pedido_id}` });
+          if (tamano_id !== undefined) {
+            updateFieldsDetalle.push("tamano_id = @tamano_id");
+            requestDetalle.input("tamano_id", sql.Int, tamano_id);
+          }
+
+          if (cantidad !== undefined) {
+            updateFieldsDetalle.push("cantidad = @cantidad");
+            requestDetalle.input("cantidad", sql.Int, cantidad);
+          }
+
+          if (precio_unitario !== undefined) {
+            updateFieldsDetalle.push("precio_unitario = @precio_unitario");
+            requestDetalle.input("precio_unitario", sql.Decimal(10, 2), precio_unitario);
+          }
+
+          if (subtotalDetalle !== undefined) {
+            updateFieldsDetalle.push("subtotal = @subtotal");
+            requestDetalle.input("subtotal", sql.Decimal(10, 2), subtotalDetalle);
+          }
+
+          if (notas_producto !== undefined) {
+            updateFieldsDetalle.push("notas_producto = @notas_producto");
+            requestDetalle.input("notas_producto", sql.VarChar(255), notas_producto);
+          }
+
+          // Ejecutar si hay cambios
+          if (updateFieldsDetalle.length > 0) {
+            const queryDetalle = `
+              UPDATE detalle_pedidos 
+              SET ${updateFieldsDetalle.join(", ")} 
+              WHERE detalle_pedido_id = @detalle_pedido_id
+            `;
+
+            const resultDetalle = await requestDetalle.query(queryDetalle);
+            if (resultDetalle.rowsAffected[0] === 0) {
+              await transaction.rollback();
+              return res.status(404).json({ error: `Detalle no encontrado (ID ${detalle_pedido_id})` });
+            }
           }
         }
       }
 
       await transaction.commit();
-
-      return res.status(200).json({ message: "Pedido y detalles actualizados correctamente" });
+      return res.status(200).json({ message: "✅ Pedido y detalles actualizados correctamente" });
 
     } catch (err) {
       await transaction.rollback();
-      console.error("updatePedidoConDetalle transaction error:", err);
+      console.error("❌ Error en transacción updatePedidoConDetalle:", err);
       return res.status(500).json({ error: "Error al actualizar el pedido con detalles" });
     }
 
   } catch (err) {
-    console.error("updatePedidoConDetalle error:", err);
-    return res.status(500).json({ error: "Error al actualizar el pedido" });
+    console.error("❌ Error general updatePedidoConDetalle:", err);
+    return res.status(500).json({ error: "Error interno al actualizar el pedido" });
   }
 };
+
+
+// Eliminar pedido y sus detalles (gracias al ON DELETE CASCADE)
+exports.deletePedidoConDetalles = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+
+    // Verificar si el pedido existe
+    const check = await pool.request()
+      .input("pedido_id", sql.Int, id)
+      .query("SELECT pedido_id FROM pedidos WHERE pedido_id = @pedido_id");
+
+    if (check.recordset.length === 0) {
+      return res.status(404).json({ error: "Pedido no encontrado" });
+    }
+
+    // Eliminar pedido (los detalles se eliminan automáticamente)
+    const result = await pool.request()
+      .input("pedido_id", sql.Int, id)
+      .query("DELETE FROM pedidos WHERE pedido_id = @pedido_id");
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "No se eliminó el pedido" });
+    }
+
+    return res.status(200).json({ message: "Pedido y detalles eliminados correctamente" });
+
+  } catch (err) {
+    console.error("deletePedidoConDetalles error:", err);
+    return res.status(500).json({ error: "Error al eliminar el pedido con sus detalles" });
+  }
+};
+
