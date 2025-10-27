@@ -1,3 +1,5 @@
+//Correr en modo dev npm run dev
+//Correr en modo produccion npm start
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
