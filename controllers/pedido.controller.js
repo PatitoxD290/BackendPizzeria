@@ -7,12 +7,9 @@ function mapToPedido(row = {}) {
     ID_Pedido: 0,
     ID_Cliente: 0,
     ID_Usuario: null,
-    Fecha_Pedido: "",
     Hora_Pedido: "",
     Estado_P: "P",
     SubTotal: 0.0,
-    Monto_Descuento: 0.0,
-    Total: 0.0,
     Notas: "",
     Fecha_Registro: ""
   };
@@ -22,12 +19,9 @@ function mapToPedido(row = {}) {
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
     ID_Usuario: row.ID_Usuario ?? template.ID_Usuario,
-    Fecha_Pedido: row.Fecha_Pedido ?? template.Fecha_Pedido,
     Hora_Pedido: row.Hora_Pedido ?? template.Hora_Pedido,
     Estado_P: row.Estado_P ?? template.Estado_P,
     SubTotal: row.SubTotal ?? template.SubTotal,
-    Monto_Descuento: row.Monto_Descuento ?? template.Monto_Descuento,
-    Total: row.Total ?? template.Total,
     Notas: row.Notas ?? template.Notas,
     Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
@@ -88,10 +82,8 @@ exports.createPedidoConDetalle = async (req, res) => {
   const {
     ID_Cliente,
     ID_Usuario,
-    Fecha_Pedido,
     Hora_Pedido,
     Estado_P,
-    Monto_Descuento,
     Notas,
     detalles // array de { ID_Producto, ID_Tamano, Cantidad }
   } = req.body;
@@ -102,7 +94,7 @@ exports.createPedidoConDetalle = async (req, res) => {
       return res.status(400).json({ error: "Debe enviar al menos un detalle de pedido" });
     }
 
-    // cliente default a 1 si no viene
+    // Cliente por defecto = 1
     const clienteIdFinal = ID_Cliente && ID_Cliente !== "" ? ID_Cliente : 1;
 
     const pool = await getConnection();
@@ -110,45 +102,36 @@ exports.createPedidoConDetalle = async (req, res) => {
     await transaction.begin();
 
     try {
-      // 1) Insertar pedido con SubTotal = 0 temporalmente
+      // 1) Insertar pedido (solo los campos del modelo)
       const requestPedido = new sql.Request(transaction);
       const insertPedidoQuery = `
         INSERT INTO Pedido (
-          ID_Cliente, ID_Usuario, Fecha_Pedido, Hora_Pedido,
-          Estado_P, SubTotal, Monto_Descuento, Total,
-          Notas, Fecha_Registro
+          ID_Cliente, ID_Usuario, Hora_Pedido,
+          Estado_P, SubTotal, Notas, Fecha_Registro
         ) VALUES (
-          @ID_Cliente, @ID_Usuario, @Fecha_Pedido, @Hora_Pedido,
-          @Estado_P, @SubTotal, @Monto_Descuento, @Total,
-          @Notas, @Fecha_Registro
+          @ID_Cliente, @ID_Usuario, @Hora_Pedido,
+          @Estado_P, @SubTotal, @Notas, @Fecha_Registro
         );
         SELECT SCOPE_IDENTITY() AS ID_Pedido;
       `;
 
-      // inicializamos SubTotal y Total en 0; luego los actualizamos
       const resultInsertPedido = await requestPedido
         .input("ID_Cliente", sql.Int, clienteIdFinal)
         .input("ID_Usuario", sql.Int, ID_Usuario || null)
-        .input("Fecha_Pedido", sql.Date, Fecha_Pedido ? new Date(Fecha_Pedido) : new Date())
         .input("Hora_Pedido", sql.VarChar(20), Hora_Pedido || new Date().toLocaleTimeString())
         .input("Estado_P", sql.Char(1), Estado_P || "P")
         .input("SubTotal", sql.Decimal(10, 2), 0.0)
-        .input("Monto_Descuento", sql.Decimal(10, 2), Monto_Descuento ?? 0.0)
-        .input("Total", sql.Decimal(10, 2), 0.0)
         .input("Notas", sql.VarChar(255), Notas || "")
         .input("Fecha_Registro", sql.DateTime, new Date())
         .query(insertPedidoQuery);
 
-      const pedido_id = resultInsertPedido.recordset && resultInsertPedido.recordset[0]
-        ? resultInsertPedido.recordset[0].ID_Pedido
-        : null;
-
+      const pedido_id = resultInsertPedido.recordset?.[0]?.ID_Pedido;
       if (!pedido_id) {
         await transaction.rollback();
         return res.status(500).json({ error: "No se pudo obtener el ID del pedido creado" });
       }
 
-      // 2) Insertar cada detalle calculando precio unitario y subtotal
+      // 2) Insertar detalles y calcular subtotal
       let subTotalAcumulado = 0.0;
 
       for (const d of detalles) {
@@ -189,23 +172,20 @@ exports.createPedidoConDetalle = async (req, res) => {
               @Cantidad, @PrecioTotal
             )
          `);
-      } // end for detalles
+      }
 
-      // 3) Actualizar Pedido con SubTotal calculado y Total (aplicando descuento si hay)
-      const totalFinal = Number((subTotalAcumulado - (Monto_Descuento ?? 0)).toFixed(2));
+      // 3) Actualizar SubTotal en el pedido
       const reqUpdatePedido = new sql.Request(transaction);
       await reqUpdatePedido
         .input("SubTotal", sql.Decimal(10, 2), subTotalAcumulado)
-        .input("Total", sql.Decimal(10, 2), totalFinal)
         .input("ID_Pedido", sql.Int, pedido_id)
-        .query(`UPDATE Pedido SET SubTotal = @SubTotal, Total = @Total WHERE ID_Pedido = @ID_Pedido`);
+        .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`);
 
       await transaction.commit();
       return res.status(201).json({
         message: "Pedido y detalles registrados correctamente",
         ID_Pedido: pedido_id,
-        SubTotal: subTotalAcumulado,
-        Total: totalFinal
+        SubTotal: subTotalAcumulado
       });
     } catch (err) {
       await transaction.rollback();
@@ -218,11 +198,12 @@ exports.createPedidoConDetalle = async (req, res) => {
   }
 };
 
-// Listar pedidos FIFO (por Fecha_Pedido ASC, Hora_Pedido ASC)
+
+// Listar pedidos FIFO (por Fecha_Registro ASC, Hora_Pedido ASC)
 exports.getPedidos = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM Pedido ORDER BY Fecha_Pedido ASC, Hora_Pedido ASC");
+    const result = await pool.request().query("SELECT * FROM Pedido ORDER BY Fecha_Registro ASC, Hora_Pedido ASC");
     const pedidos = (result.recordset || []).map(mapToPedido);
     return res.status(200).json(pedidos);
   } catch (err) {

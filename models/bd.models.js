@@ -208,7 +208,8 @@ const Venta = {
   Metodo_Pago: "B", // E=Efectivo, T=Tarjeta, B=Billetera
   Lugar_Emision: "B", // A=Tupac, B=Yarina
   IGV: 0.0,
-  Total: 0.0
+  Total: 0.0,
+  Fecha_Registro: ""
 };
 
 // ===============================
