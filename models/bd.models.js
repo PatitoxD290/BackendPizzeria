@@ -1,217 +1,270 @@
-// 1. Categoría
-const Categoria = {
-  categoria_id: 0,
-  nombre_categoria: "",
-  descripcion_categoria: ""
+// ===============================
+// 1. CATEGORÍA PRODUCTO
+// ===============================
+const CategoriaProducto = {
+  ID_Categoria_P: 0,
+  Nombre: ""
 };
 
-// 2. Tamaño de Pizza
-const TamanoPizza = {
-  tamano_id: 0,
-  nombre_tamano: "",
-  porciones: "",
-  descripcion: ""
+// ===============================
+// 2. CATEGORÍA INSUMOS
+// ===============================
+const CategoriaInsumos = {
+  ID_Categoria_I: 0,
+  Nombre: ""
 };
 
-// 3. Proveedor
+// ===============================
+// 3. PROVEEDOR
+// ===============================
 const Proveedor = {
-  proveedor_id: 0,
-  nombre_proveedor: "",
-  ruc: "",
-  direccion: "",
-  telefono: "",
-  email: "",
-  persona_contacto: "",
-  estado: "A",
-  fecha_registro: ""
+  ID_Proveedor: 0,
+  Nombre: "",
+  Ruc: "",
+  Direccion: "",
+  Telefono: "",
+  Email: "",
+  Persona_Contacto: "",
+  Estado: "A", // A=Activo, I=Inactivo
+  Fecha_Registro: ""
 };
 
-// 4. Ingrediente / Insumo
-const Ingrediente = {
-  ingrediente_id: 0,
-  nombre_ingrediente: "",
-  descripcion_ingrediente: "",
-  unidad_medida: "",
-  categoria_ingrediente: "",
-  stock_minimo: 0,
-  stock_maximo: 0,
-  estado: "A",
-  fecha_registro: ""
+// ===============================
+// 4. INSUMOS
+// ===============================
+const Insumo = {
+  ID_Insumo: 0,
+  Nombre: "",
+  Descripcion: "",
+  Unidad_Med: "",
+  ID_Categoria_I: 0,
+  Stock_Min: 0,
+  Stock_Max: 0,
+  Estado: "D", // D=Disponible, A=Agotado
+  Fecha_Registro: ""
 };
 
-// 5. Receta (cabecera)
+// ===============================
+// 5. RECETA
+// ===============================
 const Receta = {
-  receta_id: 0,
-  nombre_receta: "",
-  descripcion_receta: "",
-  tiempo_estimado_minutos: 0
+  ID_Receta: 0,
+  Nombre: "",
+  Descripcion: "",
+  Tiempo_Preparacion: "" // formato HH:MM:SS
 };
 
-// 6. Detalle de Receta
-const DetalleReceta = {
-  detalle_receta_id: 0,
-  receta_id: 0,
-  ingrediente_id: 0,
-  cantidad_requerida: 0.0,
-  unidad_medida: "",
-  descripcion_uso: ""
+// ===============================
+// 6. RECETA DETALLE
+// ===============================
+const RecetaDetalle = {
+  ID_Receta_D: 0,
+  ID_Receta: 0,
+  ID_Insumo: 0,
+  Cantidad: 0,
+  Uso: ""
 };
 
-// 7. Producto
+// ===============================
+// 7. PRODUCTO
+// ===============================
 const Producto = {
-  producto_id: 0,
-  nombre_producto: "",
-  descripcion_producto: "",
-  categoria_id: 0,
-  receta_id: null,
-  precio_venta: 0.0,
-  estado: "A",
-  fecha_registro: ""
+  ID_Producto: 0,
+  Nombre: "",
+  Descripcion: "",
+  Precio_Base: 0.0,
+  ID_Categoria_P: 0,
+  ID_Receta: null,
+  Estado: "A", // A=Activo, I=Inactivo
+  Fecha_Registro: ""
 };
 
-// 7.1. Precios por tamaño
-const PrecioProducto = {
-  precio_id: 0,
-  producto_id: 0,
-  tamano_id: null,
-  precio: 0.0,
-  activo: true,
-  fecha_registro: ""
-};
-
-// 8. Stock (entrada de inventario)
+// ===============================
+// 8. STOCK
+// ===============================
 const Stock = {
-  stock_id: 0,
-  ingrediente_id: 0,
-  proveedor_id: 0,
-  numero_lote: "",
-  cantidad_recibida: 0,
-  costo_unitario: 0.0,
-  costo_total: 0.0,
-  fecha_entrada: "",
-  fecha_vencimiento: "",
-  estado: "A"
+  ID_Stock: 0,
+  ID_Insumo: 0,
+  ID_Proveedor: 0,
+  Cantidad_Recibida: 0,
+  Costo_Unitario: 0.0,
+  Costo_Total: 0.0,
+  Fecha_Entrada: "",
+  Fecha_Vencimiento: "",
+  Estado: "A" // A=Activo, I=Inactivo, C=Caducado
 };
 
-// 9. Movimiento de Stock
-const MovimientoStock = {
-  movimiento_id: 0,
-  ingrediente_id: 0,
-  stock_id: 0,
-  tipo_movimiento: "", // ENTRADA, SALIDA, AJUSTE
-  cantidad: 0,
-  stock_actual: 0,
-  fecha_movimiento: "",
-  motivo: "",
-  registrado_por: "",
-  usuario_id: null
+// ===============================
+// 9. STOCK MOVIMIENTO
+// ===============================
+const StockMovimiento = {
+  ID_Stock_M: 0,
+  ID_Stock: 0,
+  Tipo_Mov: "Entrada", // Entrada | Salida | Ajuste
+  Motivo: "",
+  Cantidad: 0,
+  Stock_ACT: 0,
+  Usuario_ID: null,
+  Fecha_Mov: ""
 };
 
-// 10. Cliente
-const Cliente = {
-  cliente_id: 0,
-  nombre_completo: "",
-  dni: "",
-  telefono: "",
-  fecha_registro: ""
-};
-
-// 11. Cupón
+// ===============================
+// 10. CUPONES
+// ===============================
 const Cupon = {
-  cupon_id: 0,
-  codigo_cupon: "",
-  descripcion: "",
-  tipo_descuento: "", // PORCENTAJE o MONTO
-  valor_descuento: 0.0,
-  monto_minimo: 0.0,
-  usos_maximos: 0,
-  usos_actuales: 0,
-  fecha_inicio: "",
-  fecha_fin: "",
-  estado: "A",
-  fecha_registro: ""
+  ID_Cupon: 0,
+  Cod_Cupon: "",
+  Descripcion: "",
+  Tipo_Desc: "Porcentaje", // Porcentaje | Monto
+  Valor_Desc: 0.0,
+  Monto_Max: 0.0,
+  Usos_Max: 1,
+  Usos_Act: 0,
+  Fecha_INC: "",
+  Fecha_FIN: "",
+  Estado: "A", // A=Activo, I=Inactivo
+  Fecha_Registro: ""
 };
 
-// 12. Usuario
+// ===============================
+// 11. CLIENTE
+// ===============================
+const Cliente = {
+  ID_Cliente: 0,
+  DNI: "",
+  Nombre: "",
+  Apellido: "",
+  Telefono: "",
+  Fecha_Registro: ""
+};
+
+// ===============================
+// 12. TAMAÑO
+// ===============================
+const Tamano = {
+  ID_Tamano: 0,
+  Tamano: "",
+  Variacion_Precio: 0.0
+};
+
+// ===============================
+// 13. USUARIO
+// ===============================
 const Usuario = {
-  usuario_id: 0,
-  dni: "",
-  password: "",
-  nombre_completo: "",
-  rol: "", // ADMIN o EMPLEADO
-  telefono: "",
-  estado: "A",
-  fecha_registro: ""
+  ID_Usuario: 0,
+  Perfil: "",
+  Correo: "",
+  Password: "",
+  Roll: "E", // A=Admin, E=Empleado
+  Estado: "A", // A=Activo, I=Inactivo
+  Fecha_Registro: ""
 };
 
-// 13. Pedido (cabecera)
+// ===============================
+// 14. PEDIDO
+// ===============================
 const Pedido = {
-  pedido_id: 0,
-  cliente_id: 0,
-  usuario_id: null,
-  fecha_pedido: "",
-  hora_pedido: "",
-  estado_pedido: "PENDIENTE",
-  subtotal: 0.0,
-  monto_descuento: 0.0,
-  total: 0.0,
-  notas_generales: "",
-  fecha_registro: ""
+  ID_Pedido: 0,
+  ID_Cliente: 0,
+  ID_Usuario: 0,
+  Notas: "",
+  SubTotal: 0.0,
+  Estado_P: "P", // P=Pendiente, C=Cancelado, E=Entregado, D=En preparación
+  Fecha_Registro: "",
+  Hora_Pedido: ""
 };
 
-// 14. Detalle de Pedido
-const DetallePedido = {
-  detalle_pedido_id: 0,
-  pedido_id: 0,
-  producto_id: 0,
-  tamano_id: null,
-  cantidad: 0,
-  subtotal: 0.0,
-  notas_producto: ""
+// ===============================
+// 15. PEDIDO DETALLE
+// ===============================
+const PedidoDetalle = {
+  ID_Pedido_D: 0,
+  ID_Pedido: 0,
+  ID_Producto: 0,
+  ID_Tamano: 0,
+  Cantidad: 1,
+  PrecioTotal: 0.0
 };
 
-// 15. Venta
-const Venta = {
-  venta_id: 0,
-  pedido_id: 0,
-  tipo_comprobante: "", // FACTURA o BOLETA
-  fecha_venta: "",
-  usuario_id: null,
-  lugar_emision: "",
-  metodo_pago: "",
-  subtotal: 0.0,
-  igv: 0.0,
-  total: 0.0
-};
-
-// 16. Uso de Cupón
+// ===============================
+// 16. USO CUPÓN
+// ===============================
 const UsoCupon = {
-  uso_cupon_id: 0,
-  cupon_id: 0,
-  pedido_id: 0,
-  cliente_id: 0,
-  descuento_aplicado: 0.0,
-  monto_venta: 0.0,
-  fecha_uso: ""
+  ID_Uso_C: 0,
+  ID_Cupon: 0,
+  ID_Pedido: 0,
+  Descuento_Aplic: 0.0,
+  Monto_Venta: 0.0,
+  Fecha_Uso: ""
 };
 
-// Exportar todos los modelos
+// ===============================
+// 17. VENTAS
+// ===============================
+const Venta = {
+  ID_Venta: 0,
+  ID_Pedido: 0,
+  Tipo_Venta: "N", // B=Boleta, F=Factura, N=Nota
+  Metodo_Pago: "B", // E=Efectivo, T=Tarjeta, B=Billetera
+  Lugar_Emision: "B", // A=Tupac, B=Yarina
+  IGV: 0.0,
+  Total: 0.0
+};
+
+// ===============================
+// 18. DELIVERY
+// ===============================
+const Delivery = {
+  ID_Delivery: 0,
+  ID_Pedido: 0,
+  Direccion: "",
+  Estado_D: "P" // E=Entregado, P=Pendiente, C=Cancelado
+};
+
+// ===============================
+// 19. COMBOS
+// ===============================
+const Combo = {
+  ID_Combo: 0,
+  Nombre: "",
+  Descripcion: "",
+  Precio: 0.0,
+  Estado: "A"
+};
+
+// ===============================
+// 20. COMBOS DETALLE
+// ===============================
+const ComboDetalle = {
+  ID_Combo_D: 0,
+  ID_Combo: 0,
+  ID_Producto: 0,
+  ID_Tamano: 0,
+  Cantidad: 1
+};
+
+// ===============================
+// EXPORTAR TODOS LOS MODELOS
+// ===============================
 module.exports = {
-  Categoria,
-  TamanoPizza,
+  CategoriaProducto,
+  CategoriaInsumos,
   Proveedor,
-  Ingrediente,
+  Insumo,
   Receta,
-  DetalleReceta,
+  RecetaDetalle,
   Producto,
-  PrecioProducto,
   Stock,
-  MovimientoStock,
-  Cliente,
+  StockMovimiento,
   Cupon,
+  Cliente,
+  Tamano,
   Usuario,
   Pedido,
-  DetallePedido,
+  PedidoDetalle,
+  UsoCupon,
   Venta,
-  UsoCupon
+  Delivery,
+  Combo,
+  ComboDetalle
 };

@@ -6,28 +6,28 @@ const bdModel = require("../models/bd.models");
 // ==============================
 function mapToProveedor(row = {}) {
   const template = bdModel?.Proveedor || {
-    proveedor_id: 0,
-    nombre_proveedor: "",
-    ruc: "",
-    direccion: "",
-    telefono: "",
-    email: "",
-    persona_contacto: "",
-    estado: "A",
-    fecha_registro: ""
+    ID_Proveedor: 0,
+    Nombre: "",
+    Ruc: "",
+    Direccion: "",
+    Telefono: "",
+    Email: "",
+    Persona_Contacto: "",
+    Estado: "A",
+    Fecha_Registro: ""
   };
 
   return {
     ...template,
-    proveedor_id: row.proveedor_id ?? template.proveedor_id,
-    nombre_proveedor: row.nombre_proveedor ?? template.nombre_proveedor,
-    ruc: row.ruc ?? template.ruc,
-    direccion: row.direccion ?? template.direccion,
-    telefono: row.telefono ?? template.telefono,
-    email: row.email ?? template.email,
-    persona_contacto: row.persona_contacto ?? template.persona_contacto,
-    estado: row.estado ?? template.estado,
-    fecha_registro: row.fecha_registro ?? template.fecha_registro
+    ID_Proveedor: row.ID_Proveedor ?? template.ID_Proveedor,
+    Nombre: row.Nombre ?? template.Nombre,
+    Ruc: row.Ruc ?? template.Ruc,
+    Direccion: row.Direccion ?? template.Direccion,
+    Telefono: row.Telefono ?? template.Telefono,
+    Email: row.Email ?? template.Email,
+    Persona_Contacto: row.Persona_Contacto ?? template.Persona_Contacto,
+    Estado: row.Estado ?? template.Estado,
+    Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
 }
 
@@ -37,7 +37,7 @@ function mapToProveedor(row = {}) {
 exports.getProveedores = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM proveedores ORDER BY fecha_registro DESC");
+    const result = await pool.request().query("SELECT * FROM Proveedor ORDER BY Fecha_Registro DESC");
     const proveedores = (result.recordset || []).map(mapToProveedor);
     return res.status(200).json(proveedores);
   } catch (err) {
@@ -55,7 +55,7 @@ exports.getProveedorById = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT * FROM proveedores WHERE proveedor_id = @id");
+      .query("SELECT * FROM Proveedor WHERE ID_Proveedor = @id");
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Proveedor no encontrado" });
@@ -73,45 +73,52 @@ exports.getProveedorById = async (req, res) => {
 // ==============================
 exports.createProveedor = async (req, res) => {
   const {
-    nombre_proveedor,
-    ruc,
-    direccion,
-    telefono,
-    email,
-    persona_contacto,
-    estado
+    Nombre,
+    Ruc,
+    Direccion,
+    Telefono,
+    Email,
+    Persona_Contacto,
+    Estado
   } = req.body;
 
   try {
-    if (!nombre_proveedor || !ruc) {
+    if (!Nombre || !Ruc) {
       return res.status(400).json({
-        error: "Faltan campos obligatorios: nombre_proveedor y ruc"
+        error: "Faltan campos obligatorios: Nombre y Ruc"
       });
     }
 
     const pool = await getConnection();
 
-    await pool.request()
-      .input("nombre_proveedor", sql.VarChar(100), nombre_proveedor)
-      .input("ruc", sql.VarChar(20), ruc)
-      .input("direccion", sql.VarChar(255), direccion || "")
-      .input("telefono", sql.VarChar(20), telefono || "")
-      .input("email", sql.VarChar(100), email || "")
-      .input("persona_contacto", sql.VarChar(100), persona_contacto || "")
-      .input("estado", sql.Char(1), estado || "A")
-      .input("fecha_registro", sql.DateTime, new Date())
-      .query(`
-        INSERT INTO proveedores (
-          nombre_proveedor, ruc, direccion, telefono,
-          email, persona_contacto, estado, fecha_registro
-        )
-        VALUES (
-          @nombre_proveedor, @ruc, @direccion, @telefono,
-          @email, @persona_contacto, @estado, @fecha_registro
-        )
-      `);
+    const request = pool.request()
+      .input("Nombre", sql.VarChar(150), Nombre)
+      .input("Ruc", sql.VarChar(20), Ruc)
+      .input("Direccion", sql.VarChar(200), Direccion || null)
+      .input("Telefono", sql.VarChar(20), Telefono || null)
+      .input("Email", sql.VarChar(100), Email || null)
+      .input("Persona_Contacto", sql.VarChar(100), Persona_Contacto || null)
+      .input("Estado", sql.Char(1), (Estado || "A"))
+      .input("Fecha_Registro", sql.DateTime, new Date());
 
-    return res.status(201).json({ message: "Proveedor registrado correctamente" });
+    const result = await request.query(`
+      INSERT INTO Proveedor (
+        Nombre, Ruc, Direccion, Telefono,
+        Email, Persona_Contacto, Estado, Fecha_Registro
+      )
+      OUTPUT INSERTED.ID_Proveedor
+      VALUES (
+        @Nombre, @Ruc, @Direccion, @Telefono,
+        @Email, @Persona_Contacto, @Estado, @Fecha_Registro
+      )
+    `);
+
+    const nuevoId = result.recordset && result.recordset[0] ? result.recordset[0].ID_Proveedor : null;
+
+    return res.status(201).json({
+      message: "Proveedor registrado correctamente",
+      ID_Proveedor: nuevoId
+    });
   } catch (err) {
     console.error("createProveedor error:", err);
     return res.status(500).json({ error: "Error al registrar el proveedor" });
@@ -124,13 +131,13 @@ exports.createProveedor = async (req, res) => {
 exports.updateProveedor = async (req, res) => {
   const { id } = req.params;
   const {
-    nombre_proveedor,
-    ruc,
-    direccion,
-    telefono,
-    email,
-    persona_contacto,
-    estado
+    Nombre,
+    Ruc,
+    Direccion,
+    Telefono,
+    Email,
+    Persona_Contacto,
+    Estado
   } = req.body;
 
   try {
@@ -138,48 +145,48 @@ exports.updateProveedor = async (req, res) => {
     const request = pool.request();
     request.input("id", sql.Int, id);
 
-    let query = "UPDATE proveedores SET";
+    let query = "UPDATE Proveedor SET";
     let hasUpdates = false;
 
-    if (nombre_proveedor !== undefined) {
-      query += " nombre_proveedor = @nombre_proveedor,";
-      request.input("nombre_proveedor", sql.VarChar(100), nombre_proveedor);
+    if (Nombre !== undefined) {
+      query += " Nombre = @Nombre,";
+      request.input("Nombre", sql.VarChar(150), Nombre);
       hasUpdates = true;
     }
 
-    if (ruc !== undefined) {
-      query += " ruc = @ruc,";
-      request.input("ruc", sql.VarChar(20), ruc);
+    if (Ruc !== undefined) {
+      query += " Ruc = @Ruc,";
+      request.input("Ruc", sql.VarChar(20), Ruc);
       hasUpdates = true;
     }
 
-    if (direccion !== undefined) {
-      query += " direccion = @direccion,";
-      request.input("direccion", sql.VarChar(255), direccion);
+    if (Direccion !== undefined) {
+      query += " Direccion = @Direccion,";
+      request.input("Direccion", sql.VarChar(200), Direccion);
       hasUpdates = true;
     }
 
-    if (telefono !== undefined) {
-      query += " telefono = @telefono,";
-      request.input("telefono", sql.VarChar(20), telefono);
+    if (Telefono !== undefined) {
+      query += " Telefono = @Telefono,";
+      request.input("Telefono", sql.VarChar(20), Telefono);
       hasUpdates = true;
     }
 
-    if (email !== undefined) {
-      query += " email = @email,";
-      request.input("email", sql.VarChar(100), email);
+    if (Email !== undefined) {
+      query += " Email = @Email,";
+      request.input("Email", sql.VarChar(100), Email);
       hasUpdates = true;
     }
 
-    if (persona_contacto !== undefined) {
-      query += " persona_contacto = @persona_contacto,";
-      request.input("persona_contacto", sql.VarChar(100), persona_contacto);
+    if (Persona_Contacto !== undefined) {
+      query += " Persona_Contacto = @Persona_Contacto,";
+      request.input("Persona_Contacto", sql.VarChar(100), Persona_Contacto);
       hasUpdates = true;
     }
 
-    if (estado !== undefined) {
-      query += " estado = @estado,";
-      request.input("estado", sql.Char(1), estado);
+    if (Estado !== undefined) {
+      query += " Estado = @Estado,";
+      request.input("Estado", sql.Char(1), Estado);
       hasUpdates = true;
     }
 
@@ -189,7 +196,7 @@ exports.updateProveedor = async (req, res) => {
 
     // Eliminar la última coma
     query = query.slice(0, -1);
-    query += " WHERE proveedor_id = @id";
+    query += " WHERE ID_Proveedor = @id";
 
     const result = await request.query(query);
 
@@ -214,7 +221,7 @@ exports.deleteProveedor = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("DELETE FROM proveedores WHERE proveedor_id = @id");
+      .query("DELETE FROM Proveedor WHERE ID_Proveedor = @id");
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Proveedor no encontrado" });

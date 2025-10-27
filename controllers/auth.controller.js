@@ -5,18 +5,18 @@ const bcrypt = require("bcryptjs");
 // 🔹 LOGIN
 exports.login = async (req, res) => {
   try {
-    const { dni, password } = req.body;
+    const { Correo, Password } = req.body;
 
-    if (!dni || !password) {
-      return res.status(400).json({ error: "Los campos DNI y contraseña son obligatorios." });
+    if (!Correo || !Password) {
+      return res.status(400).json({ error: "Los campos Correo y contraseña son obligatorios." });
     }
 
     const pool = await getConnection();
 
-    // Buscar usuario en la tabla 'usuarios'
+    // Buscar usuario en la tabla 'Usuario'
     const result = await pool.request()
-      .input("dni", sql.VarChar, dni)
-      .query("SELECT * FROM usuarios WHERE dni = @dni");
+      .input("Correo", sql.VarChar, Correo)
+      .query("SELECT * FROM Usuario WHERE Correo = @Correo");
 
     if (result.recordset.length === 0) {
       return res.status(401).json({ error: "Usuario no encontrado." });
@@ -25,12 +25,12 @@ exports.login = async (req, res) => {
     const user = result.recordset[0];
 
     // Verificar si el usuario está activo
-    if (user.estado !== "A") {
+    if (user.Estado !== "A") {
       return res.status(403).json({ error: "Usuario inactivo. Contacte con el administrador." });
     }
 
     // Verificar contraseña con bcrypt
-    const isPasswordValid = await bcrypt.compare(password, user.password);
+    const isPasswordValid = await bcrypt.compare(Password, user.Password);
     if (!isPasswordValid) {
       return res.status(401).json({ error: "Contraseña incorrecta." });
     }
@@ -38,10 +38,10 @@ exports.login = async (req, res) => {
     // Generar token JWT
     const token = jwt.sign(
       {
-        usuario_id: user.usuario_id,
-        dni: user.dni,
-        nombre_completo: user.nombre_completo,
-        rol: user.rol,
+        ID_Usuario: user.ID_Usuario,
+        Correo: user.Correo,
+        Perfil: user.Perfil,
+        rol: user.Roll,
       },
       process.env.JWT_SECRET,
       { expiresIn: "1d" } // Expira en 1 día
@@ -53,10 +53,9 @@ exports.login = async (req, res) => {
       message: "Inicio de sesión exitoso.",
       token,
       user: {
-        id: user.usuario_id,
-        nombre: user.nombre_completo,
-        dni: user.dni,
-        rol: user.rol,
+        id: user.ID_Usuario,
+        nombre: user.Perfil,
+        rol: user.Roll,
       },
     });
 

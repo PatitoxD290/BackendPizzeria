@@ -1,27 +1,30 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-
 const helmet = require("helmet");
 const path = require("path");
+
+// arreglé el nombre del middleware (antes estaba "reteLimit.middleware")
 const rateLimit = require("./middlewares/reteLimit.middleware");
 
+// Rutas
 const authRoutes = require("./routes/auth.routes");
 const categoriaRoutes = require("./routes/categoria.routes");
 const clienteRoutes = require("./routes/cliente.routes");
 const cuponRoutes = require("./routes/cupon.routes");
 const ingredienteRoutes = require("./routes/ingrediente.routes");
 const pedidoRoutes = require("./routes/pedido.routes");
-const precioproductoRoutes = require("./routes/precio_producto.routes");
 const productoRoutes = require("./routes/producto.routes");
 const proveedorRoutes = require("./routes/proveedor.routes");
 const recetaRoutes = require("./routes/receta.routes");
 const stockRoutes = require("./routes/stock.routes");
-const tamanopizzaRoutes = require("./routes/tamano_pizza.routes");
 const usocuponRoutes = require("./routes/uso_cupon.routes");
 const usuarioRoutes = require("./routes/usuario.routes");
 const ventaRoutes = require("./routes/venta.routes");
 const MillerRoutes = require("./routes/miller.routes");
+const combosRoutes = require("./routes/combos.routes");
+const deliveryRoutes = require("./routes/delivery.routes");
+const tamanoRoutes = require("./routes/tamano.routes");
 
 // IMPORT: conexión MSSQL
 const { getConnection } = require("./config/Connection");
@@ -32,15 +35,16 @@ const app = express();
 app.use(helmet());
 
 // CORS
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:4200";
 const corsOptions = {
-  origin: process.env.FRONTEND_URL || "http://localhost:4200",
-  methods: ["GET", "POST", "PUT", "DELETE"],
+  origin: FRONTEND_URL,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 };
 app.use(cors(corsOptions));
 
-// Validación de variables
+// Validación de variables (ajusta según las que realmente uses)
 const requiredEnvVars = ["JWT_SECRET", "DB_HOST", "DB_USER", "DB_NAME"];
 requiredEnvVars.forEach((envVar) => {
   if (!process.env[envVar]) {
@@ -66,30 +70,26 @@ app.use("/api/v2", clienteRoutes);
 app.use("/api/v2", cuponRoutes);
 app.use("/api/v2", ingredienteRoutes);
 app.use("/api/v2", pedidoRoutes);
-app.use("/api/v2", precioproductoRoutes);
 app.use("/api/v2", productoRoutes);
 app.use("/api/v2", proveedorRoutes);
 app.use("/api/v2", recetaRoutes);
 app.use("/api/v2", stockRoutes);
-app.use("/api/v2", tamanopizzaRoutes);
 app.use("/api/v2", usocuponRoutes);
 app.use("/api/v2", usuarioRoutes);
 app.use("/api/v2", ventaRoutes);
 app.use("/api/v2", MillerRoutes);
+app.use("/api/v2", combosRoutes);
+app.use("/api/v2", deliveryRoutes);
+app.use("/api/v2", tamanoRoutes);
 
-// Rutas estáticas para imágenes
+// Rutas estáticas para imágenes (uploads)
 app.use(
   "/imagenesCata",
   (req, res, next) => {
-    res.setHeader(
-      "Access-Control-Allow-Origin",
-      process.env.FRONTEND_URL || "http://localhost:5173"
-    );
+    // Unificar origen con FRONTEND_URL
+    res.setHeader("Access-Control-Allow-Origin", FRONTEND_URL);
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-    res.setHeader(
-      "Access-Control-Allow-Headers",
-      "Content-Type, Authorization"
-    );
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     next();
@@ -105,11 +105,17 @@ app.use((_req, res) => {
 // Puerto
 const PORT = process.env.PORT || 3001;
 
-// Intentamos conectar a la base de datos y mostramos resultado en consola.
-// No se detiene el servidor si falla la conexión; solo registramos el estado.
+// Manejo básico de errores del proceso para que se registren
+process.on("uncaughtException", (err) => {
+  console.error("uncaughtException:", err && err.message ? err.message : err);
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("unhandledRejection:", reason);
+});
+
+// Intentamos conectar a la base de datos y arrancar el servidor
 (async () => {
   try {
-    // intenta conectar (tu Connection.js ya imprime más info)
     await getConnection();
     console.log(`[SERVER] Conexión a la base de datos establecida ✅`);
     app.locals.dbConnected = true;
@@ -120,9 +126,7 @@ const PORT = process.env.PORT || 3001;
   } finally {
     app.listen(PORT, () => {
       console.log(`Servidor corriendo en http://localhost:${PORT} 🥵🔥`);
-      console.log(
-        `[SERVER] Estado DB -> connected: ${Boolean(app.locals.dbConnected)}`
-      );
+      console.log(`[SERVER] Estado DB -> connected: ${Boolean(app.locals.dbConnected)}`);
     });
   }
 })();

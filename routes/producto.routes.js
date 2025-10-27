@@ -5,10 +5,11 @@ const { verifyToken } = require("../middlewares/auth.middleware");
 const upload = require("../config/Multer");
 
 // Definir las rutas de productos
-router.get("/productos", productoController.getProductos);  
-router.get("/productos/:id", productoController.getProductoById); 
-router.post("/productos", verifyToken, upload, productoController.createProducto); 
-router.put("/productos/:id", verifyToken, productoController.updateProducto);  
-router.delete("/productos/:id", verifyToken, productoController.deleteProducto);  
+router.get("/productos", productoController.getProductos);
+router.get("/productos/:id", productoController.getProductoById);
+// POST y PUT permiten subida de archivos a través del middleware upload
+router.post("/productos", verifyToken, upload, productoController.createProducto);
+router.put("/productos/:id", verifyToken, upload, productoController.updateProducto);
+router.delete("/productos/:id", verifyToken, productoController.deleteProducto);
 
 module.exports = router;

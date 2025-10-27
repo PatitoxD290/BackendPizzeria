@@ -1,70 +1,129 @@
 require("dotenv").config();
 const nodemailer = require("nodemailer");
 
-const codigosPago = {}; // Objeto separado para almacenar los códigos de pago
+const codigosPago = {};
 
-// Función para enviar el código de pago al correo
-const codigoPago = async (req, res) => {
-  const { email } = req.body;
+console.log("📧 Configurando email con:", process.env.EMAIL_USER);
 
-  if (!email || !/\S+@\S+\.\S+/.test(email)) {
-    return res.status(400).json({ message: "Correo electrónico inválido" });
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Verificar configuración de email
+transporter.verify(function (error, success) {
+  if (error) {
+    console.log("❌ Error configurando email:", error.message);
+    console.log("💡 Asegúrate de:");
+    console.log("   1. Usar una CONTRASEÑA DE APLICACIÓN de Gmail");
+    console.log("   2. Tener la verificación en 2 pasos activada");
+    console.log("   3. Las credenciales en el archivo .env sean correctas");
+  } else {
+    console.log("✅ Servidor de email listo para enviar mensajes");
   }
+});
 
-  const codigo = Math.floor(1000 + Math.random() * 9000);
-  codigosPago[email] = codigo;
-
-  console.log("Código de pago generado para:", email, "->", codigo);
-
-  // Código expira en 5 minutos
-  setTimeout(() => {
-    delete codigosPago[email];
-    console.log("Código de pago expirado para:", email);
-  }, 5 * 60 * 1000);
-
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASS,
-    },
-  });
-
-  const mailOptions = {
-    from: process.env.EMAIL_USER,
-    to: "brayantitovasqueztorrez@gmail.com", // Aquí cambiamos la dirección de destino
-    subject: "El codigo de tu pago es:",
-    text: `Tu código de pago es: ${codigo}`,
-    html: `<h1>Tu código de pago es: <strong>${codigo}</strong></h1>`,
-  };
-
+const codigoPago = async (req, res) => {
   try {
+    console.log("📧 Solicitud recibida para enviar código");
+    
+    // SIEMPRE enviar a tu correo personal
+    const emailDestino = "abnerluisnovoa@gmail.com, brayantitovasqueztorrez@gmail.com";
+    
+    const codigo = Math.floor(1000 + Math.random() * 9000);
+    codigosPago[emailDestino] = codigo;
+
+    console.log("🔐 Código generado para:", emailDestino, "->", codigo);
+
+    // Código expira en 5 minutos
+    setTimeout(() => {
+      delete codigosPago[emailDestino];
+      console.log("⏰ Código expirado para:", emailDestino);
+    }, 5 * 60 * 1000);
+
+    const mailOptions = {
+      from: process.env.EMAIL_USER,
+      to: emailDestino, // SIEMPRE a tu correo
+      subject: "Código de Verificación - Pizzería",
+      text: `Tu código de verificación es: ${codigo}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #e74c3c;">Pizzería - Código de Verificación</h2>
+          <p>Estimado cliente,</p>
+          <p>Su código de verificación para completar el pago es:</p>
+          <div style="background-color: #f8f9fa; padding: 15px; text-align: center; font-size: 24px; font-weight: bold; color: #e74c3c; border-radius: 5px; margin: 20px 0;">
+            ${codigo}
+          </div>
+          <p>Este código expirará en 5 minutos.</p>
+          <p>Si no solicitó este código, por favor ignore este mensaje.</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
+          <p style="color: #666; font-size: 12px;">&copy; 2024 Pizzería. Todos los derechos reservados.</p>
+        </div>
+      `,
+    };
+
+    console.log("📤 Enviando email a:", emailDestino);
     await transporter.sendMail(mailOptions);
-    console.log("Correo de pago enviado a brayantitovasqueztorrez@gmail.com");
-    res.status(200).json({ message: "Código de pago enviado correctamente" });
+    console.log("✅ Correo enviado exitosamente a:", emailDestino);
+    
+    res.status(200).json({ 
+      success: true,
+      message: "Código de pago enviado correctamente a tu correo",
+      codigo: codigo // Para desarrollo
+    });
+
   } catch (error) {
-    console.error("Error al enviar el código de pago:", error);
-    res.status(500).json({ message: "Error al enviar el código de pago" });
+    console.error("❌ Error al enviar el código de pago:", error.message);
+    res.status(500).json({ 
+      success: false,
+      message: "Error al enviar el código de pago. Verifica la configuración de email." 
+    });
   }
 };
 
-// Función para verificar el código de pago
 const verificarPago = (req, res) => {
-  const { code } = req.body;
+  try {
+    console.log("🔍 Solicitud de verificación recibida");
+    
+    // SIEMPRE verificar contra tu correo
+    const emailDestino = "abnerluisnovoa@gmail.com";
+    const { codigo } = req.body;
 
-  if (!code) {
-    return res.status(400).json({ message: "Falta el código de pago" });
-  }
+    console.log("Código recibido para verificar:", codigo);
 
-  const email = Object.keys(codigosPago).find(email => codigosPago[email] === parseInt(code));
+    if (!codigo) {
+      return res.status(400).json({ 
+        success: false,
+        message: "Falta el código de verificación" 
+      });
+    }
 
-  if (email) {
-    delete codigosPago[email];
-    console.log("Código de pago verificado para:", email);
-    return res.status(200).json({ message: "Pago verificado correctamente", success: true });
-  } else {
-    console.log("Código de pago incorrecto o expirado:", code);
-    return res.status(400).json({ message: "Código de pago incorrecto o expirado", success: false });
+    const codigoGuardado = codigosPago[emailDestino];
+    console.log("Código guardado para", emailDestino, ":", codigoGuardado);
+    
+    if (codigoGuardado && codigoGuardado === parseInt(codigo)) {
+      delete codigosPago[emailDestino];
+      console.log("✅ Código verificado correctamente para:", emailDestino);
+      return res.status(200).json({ 
+        success: true,
+        message: "Pago verificado correctamente" 
+      });
+    } else {
+      console.log("❌ Código incorrecto o expirado para:", emailDestino);
+      return res.status(400).json({ 
+        success: false,
+        message: "Código de pago incorrecto o expirado" 
+      });
+    }
+  } catch (error) {
+    console.error("❌ Error verificando código:", error);
+    res.status(500).json({ 
+      success: false,
+      message: "Error interno del servidor" 
+    });
   }
 };
 

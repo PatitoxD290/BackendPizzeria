@@ -1,4 +1,3 @@
-// routes/proveedor.routes.js
 const express = require("express");
 const router = express.Router();
 const proveedorController = require("../controllers/proveedor.controller");

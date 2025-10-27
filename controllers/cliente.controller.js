@@ -6,20 +6,22 @@ const bdModel = require("../models/bd.models");
 // ==============================
 function mapToCliente(row = {}) {
   const template = bdModel?.Cliente || {
-    cliente_id: 0,
-    nombre_completo: "",
-    dni: "",
-    telefono: "",
-    fecha_registro: ""
+    ID_Cliente: 0,
+    Nombre: "",
+    Apellido: "",
+    DNI: "",
+    Telefono: "",
+    Fecha_Registro: ""
   };
 
   return {
     ...template,
-    cliente_id: row.cliente_id ?? template.cliente_id,
-    nombre_completo: row.nombre_completo ?? template.nombre_completo,
-    dni: row.dni ?? template.dni,
-    telefono: row.telefono ?? template.telefono,
-    fecha_registro: row.fecha_registro ?? template.fecha_registro
+    ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
+    Nombre: row.Nombre ?? template.Nombre,
+    Apellido: row.Apellido ?? template.Apellido,
+    DNI: row.DNI ?? template.DNI,
+    Telefono: row.Telefono ?? template.Telefono,
+    Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
 }
 
@@ -29,7 +31,7 @@ function mapToCliente(row = {}) {
 exports.getClientes = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM clientes");
+    const result = await pool.request().query("SELECT * FROM Cliente ORDER BY ID_Cliente DESC");
     const clientes = (result.recordset || []).map(mapToCliente);
     return res.status(200).json(clientes);
   } catch (err) {
@@ -47,7 +49,7 @@ exports.getClienteById = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT * FROM clientes WHERE cliente_id = @id");
+      .query("SELECT * FROM Cliente WHERE ID_Cliente = @id");
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Cliente no encontrado" });
@@ -64,40 +66,41 @@ exports.getClienteById = async (req, res) => {
 // 📗 Crear un nuevo cliente
 // ==============================
 exports.createCliente = async (req, res) => {
-  const { nombre_completo, dni, telefono } = req.body;
+  const { Nombre, Apellido, DNI, Telefono } = req.body;
 
   try {
     // Validar campos obligatorios
-    if (!nombre_completo || !dni) {
-      return res.status(400).json({ error: "Los campos 'nombre_completo' y 'dni' son obligatorios" });
+    if (!Nombre || !Apellido || !DNI) {
+      return res.status(400).json({ error: "Los campos 'Nombre', 'Apellido' y 'DNI' son obligatorios" });
     }
 
     const pool = await getConnection();
 
     // Verificar si ya existe un cliente con ese DNI
     const existe = await pool.request()
-      .input("dni", sql.VarChar(20), dni)
-      .query("SELECT cliente_id FROM clientes WHERE dni = @dni");
+      .input("DNI", sql.VarChar(20), DNI)
+      .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI");
 
     if (existe.recordset.length > 0) {
       return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
     }
 
-    // 📌 Si 'telefono' no se envía, se inserta como NULL
+    // 📌 Si 'Telefono' no se envía, se inserta como NULL
     const request = pool.request()
-      .input("nombre_completo", sql.VarChar(255), nombre_completo)
-      .input("dni", sql.VarChar(20), dni)
-      .input("fecha_registro", sql.DateTime, new Date());
+      .input("Nombre", sql.VarChar(100), Nombre)
+      .input("Apellido", sql.VarChar(100), Apellido)
+      .input("DNI", sql.VarChar(20), DNI)
+      .input("Fecha_Registro", sql.DateTime, new Date());
 
-    if (telefono && telefono.trim() !== "") {
-      request.input("telefono", sql.VarChar(20), telefono);
+    if (Telefono && Telefono.trim() !== "") {
+      request.input("Telefono", sql.VarChar(20), Telefono);
     } else {
-      request.input("telefono", sql.VarChar(20), null);
+      request.input("Telefono", sql.VarChar(20), null);
     }
 
     await request.query(`
-      INSERT INTO clientes (nombre_completo, dni, telefono, fecha_registro)
-      VALUES (@nombre_completo, @dni, @telefono, @fecha_registro)
+      INSERT INTO Cliente (Nombre, Apellido, DNI, Telefono, Fecha_Registro)
+      VALUES (@Nombre, @Apellido, @DNI, @Telefono, @Fecha_Registro)
     `);
 
     return res.status(201).json({ message: "Cliente registrado correctamente" });
@@ -112,27 +115,32 @@ exports.createCliente = async (req, res) => {
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const { nombre_completo, telefono } = req.body;
+  const { Nombre, Apellido, Telefono } = req.body;
 
   try {
     const pool = await getConnection();
 
-    let query = `UPDATE clientes SET`;
+    let query = `UPDATE Cliente SET`;
     const request = pool.request();
     request.input("id", sql.Int, id);
 
     let hasUpdates = false;
 
-    if (nombre_completo) {
-      query += ` nombre_completo = @nombre_completo,`;
-      request.input("nombre_completo", sql.VarChar(255), nombre_completo);
+    if (Nombre) {
+      query += ` Nombre = @Nombre,`;
+      request.input("Nombre", sql.VarChar(100), Nombre);
       hasUpdates = true;
     }
 
-    // 📌 teléfono puede venir vacío o eliminarse
-    if (telefono !== undefined) {
-      query += ` telefono = @telefono,`;
-      request.input("telefono", sql.VarChar(20), telefono?.trim() || null);
+    if (Apellido) {
+      query += ` Apellido = @Apellido,`;
+      request.input("Apellido", sql.VarChar(100), Apellido);
+      hasUpdates = true;
+    }
+
+    if (Telefono !== undefined) {
+      query += ` Telefono = @Telefono,`;
+      request.input("Telefono", sql.VarChar(20), Telefono?.trim() || null);
       hasUpdates = true;
     }
 
@@ -141,7 +149,7 @@ exports.updateCliente = async (req, res) => {
     }
 
     query = query.slice(0, -1); // quitar la coma final
-    query += ` WHERE cliente_id = @id`;
+    query += ` WHERE ID_Cliente = @id`;
 
     const result = await request.query(query);
 
@@ -167,7 +175,7 @@ exports.deleteCliente = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("DELETE FROM clientes WHERE cliente_id = @id");
+      .query("DELETE FROM Cliente WHERE ID_Cliente = @id");
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Cliente no encontrado" });

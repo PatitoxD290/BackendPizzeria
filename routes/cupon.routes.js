@@ -1,4 +1,3 @@
-// routes/cupon.routes.js
 const express = require("express");
 const router = express.Router();
 
@@ -12,4 +11,3 @@ router.put("/cupones/:id", verifyToken, cuponController.updateCupon);
 router.delete("/cupones/:id", verifyToken, cuponController.deleteCupon);
 
 module.exports = router;
-  

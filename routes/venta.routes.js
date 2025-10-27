@@ -4,8 +4,8 @@ const ventaController = require("../controllers/venta.controller");
 const { verifyToken } = require("../middlewares/auth.middleware");
 
 router.get("/ventas", verifyToken, ventaController.getVentas);
-router.get("/ventas/boleta/:id", verifyToken, ventaController.datosBoletaVenta);
 router.get("/ventas/:id", verifyToken, ventaController.getVentaById);
+router.get("/ventas/boleta/:id", verifyToken, ventaController.datosBoletaVenta);
 router.post("/ventas", verifyToken, ventaController.createVenta);
 
 module.exports = router;

@@ -2,137 +2,136 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
-// 🔄 Mapper: adapta una fila SQL al modelo Ingrediente
+// 🔄 Mapper: adapta una fila SQL al modelo Insumo
 // ==============================
-function mapToIngrediente(row = {}) {
-  const template = bdModel?.Ingrediente || {
-    ingrediente_id: 0,
-    nombre_ingrediente: "",
-    descripcion_ingrediente: "",
-    unidad_medida: "",
-    categoria_ingrediente: "",
-    stock_minimo: 0,
-    stock_maximo: 0,
-    estado: "A",
-    fecha_registro: ""
+function mapToInsumo(row = {}) {
+  const template = bdModel?.Insumo || {
+    ID_Insumo: 0,
+    Nombre: "",
+    Descripcion: "",
+    Unidad_Med: "",
+    ID_Categoria_I: 0,
+    Stock_Min: 0,
+    Stock_Max: 0,
+    Estado: "D",
+    Fecha_Registro: ""
   };
 
   return {
     ...template,
-    ingrediente_id: row.ingrediente_id ?? template.ingrediente_id,
-    nombre_ingrediente: row.nombre_ingrediente ?? template.nombre_ingrediente,
-    descripcion_ingrediente: row.descripcion_ingrediente ?? template.descripcion_ingrediente,
-    unidad_medida: row.unidad_medida ?? template.unidad_medida,
-    categoria_ingrediente: row.categoria_ingrediente ?? template.categoria_ingrediente,
-    stock_minimo: row.stock_minimo ?? template.stock_minimo,
-    stock_maximo: row.stock_maximo ?? template.stock_maximo,
-    estado: row.estado ?? template.estado,
-    fecha_registro: row.fecha_registro ?? template.fecha_registro
+    ID_Insumo: row.ID_Insumo ?? template.ID_Insumo,
+    Nombre: row.Nombre ?? template.Nombre,
+    Descripcion: row.Descripcion ?? template.Descripcion,
+    Unidad_Med: row.Unidad_Med ?? template.Unidad_Med,
+    ID_Categoria_I: row.ID_Categoria_I ?? template.ID_Categoria_I,
+    Stock_Min: row.Stock_Min ?? template.Stock_Min,
+    Stock_Max: row.Stock_Max ?? template.Stock_Max,
+    Estado: row.Estado ?? template.Estado,
+    Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
 }
 
 // ==============================
-// 📘 Obtener todos los ingredientes
+// 📘 Obtener todos los insumos
 // ==============================
-exports.getIngredientes = async (_req, res) => {
+exports.getInsumos = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request()
-      .query("SELECT * FROM ingredientes ORDER BY nombre_ingrediente ASC");
-
-    const ingredientes = (result.recordset || []).map(mapToIngrediente);
-    return res.status(200).json(ingredientes);
+    const result = await pool.request().query("SELECT * FROM Insumos ORDER BY Nombre ASC");
+    const insumos = (result.recordset || []).map(mapToInsumo);
+    return res.status(200).json(insumos);
   } catch (err) {
-    console.error("getIngredientes error:", err);
-    return res.status(500).json({ error: "Error al obtener los ingredientes" });
+    console.error("getInsumos error:", err);
+    return res.status(500).json({ error: "Error al obtener los insumos" });
   }
 };
 
 // ==============================
-// 📘 Obtener un ingrediente por ID
+// 📘 Obtener un insumo por ID
 // ==============================
-exports.getIngredienteById = async (req, res) => {
+exports.getInsumoById = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT * FROM ingredientes WHERE ingrediente_id = @id");
+      .query("SELECT * FROM Insumos WHERE ID_Insumo = @id");
 
     if (!result.recordset.length) {
-      return res.status(404).json({ error: "Ingrediente no encontrado" });
+      return res.status(404).json({ error: "Insumo no encontrado" });
     }
 
-    return res.status(200).json(mapToIngrediente(result.recordset[0]));
+    return res.status(200).json(mapToInsumo(result.recordset[0]));
   } catch (err) {
-    console.error("getIngredienteById error:", err);
-    return res.status(500).json({ error: "Error al obtener el ingrediente" });
+    console.error("getInsumoById error:", err);
+    return res.status(500).json({ error: "Error al obtener el insumo" });
   }
 };
 
 // ==============================
-// 📗 Crear un nuevo ingrediente
+// 📗 Crear un nuevo insumo
 // ==============================
-exports.createIngrediente = async (req, res) => {
+exports.createInsumo = async (req, res) => {
   const {
-    nombre_ingrediente,
-    descripcion_ingrediente,
-    unidad_medida,
-    categoria_ingrediente,
-    stock_minimo,
-    stock_maximo,
-    estado
+    Nombre,
+    Descripcion,
+    Unidad_Med,
+    ID_Categoria_I,
+    Stock_Min,
+    Stock_Max,
+    Estado
   } = req.body;
 
   try {
-    if (!nombre_ingrediente || !unidad_medida || !categoria_ingrediente) {
+    // validar campos obligatorios según tu DDL
+    if (!Nombre || !Unidad_Med || ID_Categoria_I == null) {
       return res.status(400).json({
-        error: "Faltan campos obligatorios: nombre_ingrediente, unidad_medida o categoria_ingrediente"
+        error: "Faltan campos obligatorios: Nombre, Unidad_Med o ID_Categoria_I"
       });
     }
 
     const pool = await getConnection();
 
-    await pool.request()
-      .input("nombre_ingrediente", sql.VarChar(100), nombre_ingrediente)
-      .input("descripcion_ingrediente", sql.VarChar(255), descripcion_ingrediente || "")
-      .input("unidad_medida", sql.VarChar(50), unidad_medida)
-      .input("categoria_ingrediente", sql.VarChar(100), categoria_ingrediente)
-      .input("stock_minimo", sql.Int, stock_minimo ?? 0)
-      .input("stock_maximo", sql.Int, stock_maximo ?? 0)
-      .input("estado", sql.Char(1), estado || "A")
-      .input("fecha_registro", sql.DateTime, new Date())
-      .query(`
-        INSERT INTO ingredientes (
-          nombre_ingrediente, descripcion_ingrediente, unidad_medida,
-          categoria_ingrediente, stock_minimo, stock_maximo, estado, fecha_registro
-        )
-        VALUES (
-          @nombre_ingrediente, @descripcion_ingrediente, @unidad_medida,
-          @categoria_ingrediente, @stock_minimo, @stock_maximo, @estado, @fecha_registro
-        )
-      `);
+    const request = pool.request()
+      .input("Nombre", sql.VarChar(100), Nombre)
+      .input("Descripcion", sql.VarChar(255), Descripcion || "")
+      .input("Unidad_Med", sql.VarChar(50), Unidad_Med)
+      .input("ID_Categoria_I", sql.Int, ID_Categoria_I)
+      .input("Stock_Min", sql.Int, (Stock_Min ?? 0))
+      .input("Stock_Max", sql.Int, (Stock_Max ?? 0))
+      .input("Estado", sql.Char(1), (Estado || "D"))
+      .input("Fecha_Registro", sql.DateTime, new Date());
 
-    return res.status(201).json({ message: "Ingrediente registrado correctamente" });
+    await request.query(`
+      INSERT INTO Insumos (
+        Nombre, Descripcion, Unidad_Med,
+        ID_Categoria_I, Stock_Min, Stock_Max, Estado, Fecha_Registro
+      ) VALUES (
+        @Nombre, @Descripcion, @Unidad_Med,
+        @ID_Categoria_I, @Stock_Min, @Stock_Max, @Estado, @Fecha_Registro
+      )
+    `);
+
+    return res.status(201).json({ message: "Insumo registrado correctamente" });
   } catch (err) {
-    console.error("createIngrediente error:", err);
-    return res.status(500).json({ error: "Error al registrar el ingrediente" });
+    console.error("createInsumo error:", err);
+    return res.status(500).json({ error: "Error al registrar el insumo" });
   }
 };
 
 // ==============================
-// 📙 Actualizar un ingrediente
+// 📙 Actualizar un insumo
 // ==============================
-exports.updateIngrediente = async (req, res) => {
+exports.updateInsumo = async (req, res) => {
   const { id } = req.params;
   const {
-    nombre_ingrediente,
-    descripcion_ingrediente,
-    unidad_medida,
-    categoria_ingrediente,
-    stock_minimo,
-    stock_maximo,
-    estado
+    Nombre,
+    Descripcion,
+    Unidad_Med,
+    ID_Categoria_I,
+    Stock_Min,
+    Stock_Max,
+    Estado
   } = req.body;
 
   try {
@@ -140,48 +139,48 @@ exports.updateIngrediente = async (req, res) => {
     const request = pool.request();
     request.input("id", sql.Int, id);
 
-    let query = "UPDATE ingredientes SET";
+    let query = "UPDATE Insumos SET";
     let hasUpdates = false;
 
-    if (nombre_ingrediente !== undefined) {
-      query += " nombre_ingrediente = @nombre_ingrediente,";
-      request.input("nombre_ingrediente", sql.VarChar(100), nombre_ingrediente);
+    if (Nombre !== undefined) {
+      query += " Nombre = @Nombre,";
+      request.input("Nombre", sql.VarChar(100), Nombre);
       hasUpdates = true;
     }
 
-    if (descripcion_ingrediente !== undefined) {
-      query += " descripcion_ingrediente = @descripcion_ingrediente,";
-      request.input("descripcion_ingrediente", sql.VarChar(255), descripcion_ingrediente);
+    if (Descripcion !== undefined) {
+      query += " Descripcion = @Descripcion,";
+      request.input("Descripcion", sql.VarChar(255), Descripcion);
       hasUpdates = true;
     }
 
-    if (unidad_medida !== undefined) {
-      query += " unidad_medida = @unidad_medida,";
-      request.input("unidad_medida", sql.VarChar(50), unidad_medida);
+    if (Unidad_Med !== undefined) {
+      query += " Unidad_Med = @Unidad_Med,";
+      request.input("Unidad_Med", sql.VarChar(50), Unidad_Med);
       hasUpdates = true;
     }
 
-    if (categoria_ingrediente !== undefined) {
-      query += " categoria_ingrediente = @categoria_ingrediente,";
-      request.input("categoria_ingrediente", sql.VarChar(100), categoria_ingrediente);
+    if (ID_Categoria_I !== undefined) {
+      query += " ID_Categoria_I = @ID_Categoria_I,";
+      request.input("ID_Categoria_I", sql.Int, ID_Categoria_I);
       hasUpdates = true;
     }
 
-    if (stock_minimo !== undefined) {
-      query += " stock_minimo = @stock_minimo,";
-      request.input("stock_minimo", sql.Int, stock_minimo);
+    if (Stock_Min !== undefined) {
+      query += " Stock_Min = @Stock_Min,";
+      request.input("Stock_Min", sql.Int, Stock_Min);
       hasUpdates = true;
     }
 
-    if (stock_maximo !== undefined) {
-      query += " stock_maximo = @stock_maximo,";
-      request.input("stock_maximo", sql.Int, stock_maximo);
+    if (Stock_Max !== undefined) {
+      query += " Stock_Max = @Stock_Max,";
+      request.input("Stock_Max", sql.Int, Stock_Max);
       hasUpdates = true;
     }
 
-    if (estado !== undefined) {
-      query += " estado = @estado,";
-      request.input("estado", sql.Char(1), estado);
+    if (Estado !== undefined) {
+      query += " Estado = @Estado,";
+      request.input("Estado", sql.Char(1), Estado);
       hasUpdates = true;
     }
 
@@ -189,42 +188,41 @@ exports.updateIngrediente = async (req, res) => {
       return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
     }
 
-    // Eliminar la última coma
+    // quitar coma final y agregar WHERE
     query = query.slice(0, -1);
-    query += " WHERE ingrediente_id = @id";
+    query += " WHERE ID_Insumo = @id";
 
     const result = await request.query(query);
 
     if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Ingrediente no encontrado" });
+      return res.status(404).json({ error: "Insumo no encontrado" });
     }
 
-    return res.status(200).json({ message: "Ingrediente actualizado correctamente" });
+    return res.status(200).json({ message: "Insumo actualizado correctamente" });
   } catch (err) {
-    console.error("updateIngrediente error:", err);
-    return res.status(500).json({ error: "Error al actualizar el ingrediente" });
+    console.error("updateInsumo error:", err);
+    return res.status(500).json({ error: "Error al actualizar el insumo" });
   }
 };
 
-
 // ==============================
-// 📕 Eliminar un ingrediente
+// 📕 Eliminar un insumo
 // ==============================
-exports.deleteIngrediente = async (req, res) => {
+exports.deleteInsumo = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("DELETE FROM ingredientes WHERE ingrediente_id = @id");
+      .query("DELETE FROM Insumos WHERE ID_Insumo = @id");
 
     if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Ingrediente no encontrado" });
+      return res.status(404).json({ error: "Insumo no encontrado" });
     }
 
-    return res.status(200).json({ message: "Ingrediente eliminado correctamente" });
+    return res.status(200).json({ message: "Insumo eliminado correctamente" });
   } catch (err) {
-    console.error("deleteIngrediente error:", err);
-    return res.status(500).json({ error: "Error al eliminar el ingrediente" });
+    console.error("deleteInsumo error:", err);
+    return res.status(500).json({ error: "Error al eliminar el insumo" });
   }
 };
