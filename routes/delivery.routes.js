@@ -5,7 +5,7 @@ const { verifyToken } = require("../middlewares/auth.middleware");
 
 router.get("/delivery", verifyToken, deliveryController.getDeliveries);
 router.get("/delivery/:id", verifyToken, deliveryController.getDeliveryById);
-router.post("/delivery", verifyToken, deliveryController.createDelivery);
+router.post("/delivery", deliveryController.createDelivery);
 router.put("/delivery/:id", verifyToken, deliveryController.updateDelivery);
 
 

@@ -8,14 +8,14 @@ function getCategoriaConfig(tipo) {
   const lower = tipo?.toLowerCase();
   if (lower === "producto" || lower === "productos") {
     return {
-      table: "categorias_productos",
+      table: "Categoria_Producto",
       id: "ID_Categoria_P",
       nombre: "Nombre",
       model: bdModel.CategoriaProducto
     };
   } else if (lower === "insumo" || lower === "insumos") {
     return {
-      table: "categorias_insumos",
+      table: "Categoria_Insumos",
       id: "ID_Categoria_I",
       nombre: "Nombre",
       model: bdModel.CategoriaInsumos

@@ -5,8 +5,8 @@ const categoriaController = require("../controllers/categoria.controller");
 const { verifyToken } = require("../middlewares/auth.middleware");
 
 // Todas las rutas incluyen el parámetro :tipo => 'producto' o 'insumo'
-router.get("/categorias/:tipo", verifyToken, categoriaController.getCategorias);
-router.get("/categorias/:tipo/:id", verifyToken, categoriaController.getCategoriaById);
+router.get("/categorias/:tipo", categoriaController.getCategorias);
+router.get("/categorias/:tipo/:id", categoriaController.getCategoriaById);
 router.post("/categorias/:tipo", verifyToken, categoriaController.createCategoria);
 router.put("/categorias/:tipo/:id", verifyToken, categoriaController.updateCategoria);
 router.delete("/categorias/:tipo/:id", verifyToken, categoriaController.deleteCategoria);

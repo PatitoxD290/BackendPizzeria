@@ -165,7 +165,7 @@ exports.createComboConDetalle = async (req, res) => {
 
       for (const d of detalles) {
         const { ID_Producto, ID_Tamano, Cantidad } = d;
-        if (!ID_Producto || Cantidad == null) {
+        if (!ID_Producto || Cantidad == null || ID_Tamano == null) {
           await transaction.rollback();
           return res.status(400).json({ error: "Cada detalle debe tener ID_Producto y Cantidad" });
         }

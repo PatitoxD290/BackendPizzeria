@@ -6,7 +6,7 @@ const { verifyToken } = require("../middlewares/auth.middleware");
 
 router.get("/clientes", verifyToken, clienteController.getClientes);
 router.get("/clientes/:id", verifyToken, clienteController.getClienteById);
-router.post("/clientes", verifyToken, clienteController.createCliente);
+router.post("/clientes", clienteController.createCliente);
 router.put("/clientes/:id", verifyToken, clienteController.updateCliente);
 router.delete("/clientes/:id", verifyToken, clienteController.deleteCliente);
 

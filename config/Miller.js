@@ -89,7 +89,7 @@ const verificarPago = (req, res) => {
     console.log("🔍 Solicitud de verificación recibida");
     
     // SIEMPRE verificar contra tu correo
-    const emailDestino = "abnerluisnovoa@gmail.com";
+    const emailDestino = "abnerluisnovoa@gmail.com, brayantitovasqueztorrez@gmail.com";
     const { codigo } = req.body;
 
     console.log("Código recibido para verificar:", codigo);
