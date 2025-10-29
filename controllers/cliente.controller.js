@@ -7,9 +7,9 @@ const bdModel = require("../models/bd.models");
 function mapToCliente(row = {}) {
   const template = bdModel?.Cliente || {
     ID_Cliente: 0,
+    DNI: "",
     Nombre: "",
     Apellido: "",
-    DNI: "",
     Telefono: "",
     Fecha_Registro: ""
   };
@@ -17,9 +17,9 @@ function mapToCliente(row = {}) {
   return {
     ...template,
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
+    DNI: row.DNI ?? template.DNI,
     Nombre: row.Nombre ?? template.Nombre,
     Apellido: row.Apellido ?? template.Apellido,
-    DNI: row.DNI ?? template.DNI,
     Telefono: row.Telefono ?? template.Telefono,
     Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
@@ -69,39 +69,36 @@ exports.createCliente = async (req, res) => {
   const { Nombre, Apellido, DNI, Telefono } = req.body;
 
   try {
-    // Validar campos obligatorios
-    if (!Nombre || !Apellido || !DNI) {
-      return res.status(400).json({ error: "Los campos 'Nombre', 'Apellido' y 'DNI' son obligatorios" });
-    }
-
     const pool = await getConnection();
 
-    // Verificar si ya existe un cliente con ese DNI
-    const existe = await pool.request()
-      .input("DNI", sql.VarChar(20), DNI)
-      .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI");
+    // 📌 Validar que el DNI no se repita (si fue proporcionado)
+    if (DNI && DNI.trim() !== "") {
+      const existe = await pool.request()
+        .input("DNI", sql.VarChar(20), DNI.trim())
+        .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI");
 
-    if (existe.recordset.length > 0) {
-      return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
+      if (existe.recordset.length > 0) {
+        return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
+      }
     }
 
-    // 📌 Si 'Telefono' no se envía, se inserta como NULL
+    // 📌 Insertar datos (los que falten se irán como NULL)
     const request = pool.request()
-      .input("Nombre", sql.VarChar(100), Nombre)
-      .input("Apellido", sql.VarChar(100), Apellido)
-      .input("DNI", sql.VarChar(20), DNI)
+      .input("Nombre", sql.VarChar(100), Nombre?.trim() || null)
+      .input("Apellido", sql.VarChar(100), Apellido?.trim() || null)
+      .input("DNI", sql.VarChar(20), DNI?.trim() || null)
+      .input("Telefono", sql.VarChar(20), Telefono?.trim() || null)
       .input("Fecha_Registro", sql.DateTime, new Date());
-
-    if (Telefono && Telefono.trim() !== "") {
-      request.input("Telefono", sql.VarChar(20), Telefono);
-    } else {
-      request.input("Telefono", sql.VarChar(20), null);
-    }
 
     await request.query(`
       INSERT INTO Cliente (Nombre, Apellido, DNI, Telefono, Fecha_Registro)
-      VALUES (@Nombre, @Apellido, @DNI, @Telefono, @Fecha_Registro)
+      VALUES (@Nombre, @Apellido, @DNI, @Telefono, @Fecha_Registro);
+      SELECT SCOPE_IDENTITY() AS ID_Cliente;
     `);
+
+    const clienteCreado = await pool.request().query("SELECT TOP 1 * FROM Cliente ORDER BY ID_Cliente DESC");
+    return res.status(201).json(mapToCliente(clienteCreado.recordset[0]));
+
 
     return res.status(201).json({ message: "Cliente registrado correctamente" });
   } catch (err) {
@@ -115,10 +112,22 @@ exports.createCliente = async (req, res) => {
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const { Nombre, Apellido, Telefono } = req.body;
+  const { Nombre, Apellido, DNI, Telefono } = req.body;
 
   try {
     const pool = await getConnection();
+
+    // 📌 Validar que el DNI no se repita (si fue proporcionado)
+    if (DNI && DNI.trim() !== "") {
+      const existe = await pool.request()
+        .input("DNI", sql.VarChar(20), DNI.trim())
+        .input("id", sql.Int, id)
+        .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI AND ID_Cliente <> @id");
+
+      if (existe.recordset.length > 0) {
+        return res.status(400).json({ error: "El DNI ingresado ya pertenece a otro cliente" });
+      }
+    }
 
     let query = `UPDATE Cliente SET`;
     const request = pool.request();
@@ -126,15 +135,21 @@ exports.updateCliente = async (req, res) => {
 
     let hasUpdates = false;
 
-    if (Nombre) {
+    if (Nombre !== undefined) {
       query += ` Nombre = @Nombre,`;
-      request.input("Nombre", sql.VarChar(100), Nombre);
+      request.input("Nombre", sql.VarChar(100), Nombre?.trim() || null);
       hasUpdates = true;
     }
 
-    if (Apellido) {
+    if (Apellido !== undefined) {
       query += ` Apellido = @Apellido,`;
-      request.input("Apellido", sql.VarChar(100), Apellido);
+      request.input("Apellido", sql.VarChar(100), Apellido?.trim() || null);
+      hasUpdates = true;
+    }
+
+    if (DNI !== undefined) {
+      query += ` DNI = @DNI,`;
+      request.input("DNI", sql.VarChar(20), DNI?.trim() || null);
       hasUpdates = true;
     }
 

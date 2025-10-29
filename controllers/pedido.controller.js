@@ -431,3 +431,78 @@ exports.updatePedidoConDetalle = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar el pedido" });
   }
 };
+
+// =============================
+// 🔹 Obtener solo los detalles
+// =============================
+exports.getPedidoDetalles = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const pool = await getConnection();
+
+    const result = await pool.request()
+      .input("ID_Pedido", sql.Int, id)
+      .query(`
+        SELECT 
+          d.ID_Pedido_D, d.ID_Producto, d.Cantidad, d.PrecioTotal,
+          p.Nombre AS nombre_producto,
+          cp.Nombre AS nombre_categoria,
+          t.Tamano AS nombre_tamano
+        FROM Pedido_Detalle d
+        INNER JOIN Producto p ON d.ID_Producto = p.ID_Producto
+        LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
+        LEFT JOIN Tamano t ON d.ID_Tamano = t.ID_Tamano
+        WHERE d.ID_Pedido = @ID_Pedido
+      `);
+
+    if (!result.recordset.length)
+      return res.status(404).json({ error: "No hay detalles para este pedido" });
+
+    return res.status(200).json(result.recordset);
+  } catch (err) {
+    console.error("❌ getPedidoDetalles error:", err.message);
+    return res.status(500).json({ error: "Error al obtener los detalles" });
+  }
+};
+
+// =============================
+// 🔹 Obtener Pedido por ID + Detalles
+// =============================
+exports.getPedidoById = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const pool = await getConnection();
+
+    const pedidoRes = await pool.request()
+      .input("ID_Pedido", sql.Int, id)
+      .query("SELECT * FROM Pedido WHERE ID_Pedido = @ID_Pedido");
+
+    if (!pedidoRes.recordset.length)
+      return res.status(404).json({ error: "Pedido no encontrado" });
+
+    const pedido = pedidoRes.recordset[0];
+
+    const detallesRes = await pool.request()
+      .input("ID_Pedido", sql.Int, id)
+      .query(`
+        SELECT 
+          d.ID_Pedido_D, d.ID_Pedido, d.ID_Producto, d.ID_Tamano, d.Cantidad, d.PrecioTotal,
+          p.Nombre AS nombre_producto,
+          cp.Nombre AS nombre_categoria,
+          t.Tamano AS nombre_tamano
+        FROM Pedido_Detalle d
+        INNER JOIN Producto p ON d.ID_Producto = p.ID_Producto
+        LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
+        LEFT JOIN Tamano t ON d.ID_Tamano = t.ID_Tamano
+        WHERE d.ID_Pedido = @ID_Pedido
+      `);
+
+    return res.status(200).json({
+      ...pedido,
+      detalles: detallesRes.recordset || []
+    });
+  } catch (err) {
+    console.error("❌ getPedidoById error:", err.message);
+    return res.status(500).json({ error: "Error al obtener el pedido" });
+  }
+};
