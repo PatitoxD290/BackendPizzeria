@@ -3,6 +3,8 @@ const bdModel = require("../models/bd.models");
 const path = require("path");
 const fs = require("fs");
 
+// Carpeta de uploads
+const uploadDir = path.join(__dirname, '..', 'uploads');
 // ==============================
 // 🔄 Mapper: adapta una fila SQL al modelo Producto
 // ==============================
@@ -156,38 +158,26 @@ exports.createProducto = async (req, res) => {
 // ==============================
 exports.updateProducto = async (req, res) => {
   const { id } = req.params;
-  // Campos permitidos a actualizar
-  const allowedFields = [
-    "Nombre",
-    "Descripcion",
-    "Precio_Base",
-    "ID_Categoria_P",
-    "ID_Receta",
-    "Estado"
-  ];
+  const allowedFields = ["Nombre", "Descripcion", "Precio_Base", "ID_Categoria_P", "ID_Receta", "Estado"];
 
   try {
     const pool = await getConnection();
 
-    // Filtrar campos permitidos
+    // Filtrar solo los campos permitidos
     const fieldsToUpdate = {};
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        fieldsToUpdate[field] = req.body[field];
-      }
+      if (req.body[field] !== undefined) fieldsToUpdate[field] = req.body[field];
     }
 
-    // categoría no puede ser null si se envía (la regla: categoria no null)
     if (fieldsToUpdate.ID_Categoria_P === null) {
       return res.status(400).json({ error: "ID_Categoria_P no puede ser null" });
     }
 
-    // Si no hay campos y no hay archivos, error
     if (Object.keys(fieldsToUpdate).length === 0 && !(req.files && req.files.length > 0)) {
       return res.status(400).json({ error: "No se enviaron campos para actualizar ni archivos" });
     }
 
-    // Si hay campos a actualizar, construir query dinámico
+    // Actualizar campos si hay
     if (Object.keys(fieldsToUpdate).length > 0) {
       let setClause = "";
       const request = pool.request();
@@ -195,22 +185,17 @@ exports.updateProducto = async (req, res) => {
 
       for (const [key, value] of Object.entries(fieldsToUpdate)) {
         const paramName = `param${i}`;
-        if (key === "Precio_Base") {
-          request.input(paramName, sql.Decimal(10, 2), value);
-        } else if (key === "ID_Categoria_P" || key === "ID_Receta") {
-          request.input(paramName, sql.Int, value === null ? null : Number(value));
-        } else if (key === "Estado") {
-          request.input(paramName, sql.Char(1), value);
-        } else if (key === "Descripcion") {
-          request.input(paramName, sql.VarChar(8000), value || "");
-        } else {
-          request.input(paramName, sql.VarChar(100), value);
-        }
+        if (key === "Precio_Base") request.input(paramName, sql.Decimal(10, 2), value);
+        else if (key === "ID_Categoria_P" || key === "ID_Receta") request.input(paramName, sql.Int, value === null ? null : Number(value));
+        else if (key === "Estado") request.input(paramName, sql.Char(1), value);
+        else if (key === "Descripcion") request.input(paramName, sql.VarChar(8000), value || "");
+        else request.input(paramName, sql.VarChar(100), value);
+
         setClause += `${key} = @${paramName}, `;
         i++;
       }
 
-      setClause = setClause.slice(0, -2); // quitar coma final
+      setClause = setClause.slice(0, -2); // quitar última coma
       request.input("id", sql.Int, id);
 
       const query = `UPDATE Producto SET ${setClause} WHERE ID_Producto = @id`;
@@ -221,9 +206,12 @@ exports.updateProducto = async (req, res) => {
       }
     }
 
-    // Manejo de archivos si vienen (renombrar igual que en create)
+    // Manejo de archivos si vienen
     const archivosRenombrados = [];
     if (req.files && req.files.length > 0) {
+      // Eliminar archivos antiguos
+      eliminarImagenesProducto(id);
+
       for (let i = 0; i < req.files.length; i++) {
         const file = req.files[i];
         const extension = path.extname(file.originalname);
@@ -246,6 +234,7 @@ exports.updateProducto = async (req, res) => {
       archivos_subidos: archivosRenombrados.length,
       nombres_archivos: archivosRenombrados
     });
+
   } catch (err) {
     console.error("updateProducto error:", err);
     return res.status(500).json({ error: "Error al actualizar el producto" });

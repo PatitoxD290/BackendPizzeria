@@ -34,6 +34,27 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
+function deleteFileByName(filename) {
+  return new Promise((resolve, reject) => {
+    const filePath = path.join(uploadDir, filename);
+
+    fs.access(filePath, fs.constants.F_OK, (err) => {
+      if (err) {
+        return reject(`El archivo "${filename}" no existe.`);
+      }
+
+      fs.unlink(filePath, (err) => {
+        if (err) {
+          return reject(`Error al eliminar el archivo "${filename}": ${err.message}`);
+        }
+
+        resolve(`Archivo "${filename}" eliminado correctamente.`);
+      });
+    });
+  });
+}
+
+
 // Configuración Multer, máximo 3 archivos en campo 'referencia', pero opcional
 const upload = multer({
   storage,
@@ -41,4 +62,4 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max por archivo
 }).array("file", 3);
 
-module.exports = upload;
+module.exports = upload, deleteFileByName;
