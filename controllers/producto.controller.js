@@ -2,9 +2,24 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 const path = require("path");
 const fs = require("fs");
-
 // Carpeta de uploads
-const uploadDir = path.join(__dirname, '..', 'uploads');
+const uploadDir = path.join(__dirname, "..", "uploads");
+
+// Función para eliminar imágenes antiguas de un producto
+function eliminarImagenesProducto(idProducto) {
+  const files = fs.readdirSync(uploadDir);
+  files.forEach((file) => {
+    if (file.startsWith(`producto_${idProducto}_`)) {
+      const filePath = path.join(uploadDir, file);
+      try {
+        fs.unlinkSync(filePath);
+        console.log(`Archivo eliminado: ${file}`);
+      } catch (err) {
+        console.error(`Error eliminando archivo ${file}:`, err);
+      }
+    }
+  });
+}
 // ==============================
 // 🔄 Mapper: adapta una fila SQL al modelo Producto
 // ==============================
@@ -17,7 +32,7 @@ function mapToProducto(row = {}) {
     ID_Categoria_P: 0,
     ID_Receta: null,
     Estado: "A",
-    Fecha_Registro: ""
+    Fecha_Registro: "",
   };
 
   return {
@@ -29,7 +44,7 @@ function mapToProducto(row = {}) {
     ID_Categoria_P: row.ID_Categoria_P ?? template.ID_Categoria_P,
     ID_Receta: row.ID_Receta ?? template.ID_Receta,
     Estado: row.Estado ?? template.Estado,
-    Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
+    Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro,
   };
 }
 
@@ -39,7 +54,9 @@ function mapToProducto(row = {}) {
 exports.getProductos = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
+    const result = await pool
+      .request()
+      .query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
     const productos = (result.recordset || []).map(mapToProducto);
     return res.status(200).json(productos);
   } catch (err) {
@@ -55,7 +72,8 @@ exports.getProductoById = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("id", sql.Int, id)
       .query("SELECT * FROM Producto WHERE ID_Producto = @id");
 
@@ -80,13 +98,13 @@ exports.createProducto = async (req, res) => {
     ID_Categoria_P,
     ID_Receta,
     Precio_Base,
-    Estado
+    Estado,
   } = req.body;
 
   // Validaciones: categoría obligatoria y precio obligatorio
   if (!Nombre || ID_Categoria_P == null || Precio_Base == null) {
     return res.status(400).json({
-      error: "Faltan campos obligatorios: Nombre, ID_Categoria_P o Precio_Base"
+      error: "Faltan campos obligatorios: Nombre, ID_Categoria_P o Precio_Base",
     });
   }
 
@@ -94,15 +112,15 @@ exports.createProducto = async (req, res) => {
     const pool = await getConnection();
 
     // Insertar Producto y obtener ID con SCOPE_IDENTITY()
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("Nombre", sql.VarChar(100), Nombre)
       .input("Descripcion", sql.VarChar(8000), Descripcion || "") // TEXT en BD -> usar tamaño grande
       .input("ID_Categoria_P", sql.Int, Number(ID_Categoria_P))
       .input("ID_Receta", sql.Int, ID_Receta ? Number(ID_Receta) : null)
       .input("Precio_Base", sql.Decimal(10, 2), Precio_Base)
-      .input("Estado", sql.Char(1), (Estado || "A"))
-      .input("Fecha_Registro", sql.DateTime, new Date())
-      .query(`
+      .input("Estado", sql.Char(1), Estado || "A")
+      .input("Fecha_Registro", sql.DateTime, new Date()).query(`
         INSERT INTO Producto (
           Nombre, Descripcion, Precio_Base,
           ID_Categoria_P, ID_Receta, Estado, Fecha_Registro
@@ -114,10 +132,15 @@ exports.createProducto = async (req, res) => {
         SELECT SCOPE_IDENTITY() AS ID_Producto;
       `);
 
-    const idProducto = result.recordset && result.recordset[0] ? result.recordset[0].ID_Producto : null;
+    const idProducto =
+      result.recordset && result.recordset[0]
+        ? result.recordset[0].ID_Producto
+        : null;
 
     if (!idProducto) {
-      return res.status(500).json({ error: "No se pudo obtener el ID del producto creado" });
+      return res
+        .status(500)
+        .json({ error: "No se pudo obtener el ID del producto creado" });
     }
 
     // Manejo de archivos (si vienen)
@@ -145,7 +168,7 @@ exports.createProducto = async (req, res) => {
       message: "Producto registrado correctamente",
       ID_Producto: idProducto,
       archivos_subidos: archivosRenombrados.length,
-      nombres_archivos: archivosRenombrados
+      nombres_archivos: archivosRenombrados,
     });
   } catch (err) {
     console.error("createProducto error:", err);
@@ -158,7 +181,14 @@ exports.createProducto = async (req, res) => {
 // ==============================
 exports.updateProducto = async (req, res) => {
   const { id } = req.params;
-  const allowedFields = ["Nombre", "Descripcion", "Precio_Base", "ID_Categoria_P", "ID_Receta", "Estado"];
+  const allowedFields = [
+    "Nombre",
+    "Descripcion",
+    "Precio_Base",
+    "ID_Categoria_P",
+    "ID_Receta",
+    "Estado",
+  ];
 
   try {
     const pool = await getConnection();
@@ -166,15 +196,24 @@ exports.updateProducto = async (req, res) => {
     // Filtrar solo los campos permitidos
     const fieldsToUpdate = {};
     for (const field of allowedFields) {
-      if (req.body[field] !== undefined) fieldsToUpdate[field] = req.body[field];
+      if (req.body[field] !== undefined) {
+        fieldsToUpdate[field] = req.body[field];
+      }
     }
 
     if (fieldsToUpdate.ID_Categoria_P === null) {
-      return res.status(400).json({ error: "ID_Categoria_P no puede ser null" });
+      return res
+        .status(400)
+        .json({ error: "ID_Categoria_P no puede ser null" });
     }
 
-    if (Object.keys(fieldsToUpdate).length === 0 && !(req.files && req.files.length > 0)) {
-      return res.status(400).json({ error: "No se enviaron campos para actualizar ni archivos" });
+    if (
+      Object.keys(fieldsToUpdate).length === 0 &&
+      !(req.files && req.files.length > 0)
+    ) {
+      return res
+        .status(400)
+        .json({ error: "No se enviaron campos para actualizar ni archivos" });
     }
 
     // Actualizar campos si hay
@@ -185,10 +224,18 @@ exports.updateProducto = async (req, res) => {
 
       for (const [key, value] of Object.entries(fieldsToUpdate)) {
         const paramName = `param${i}`;
-        if (key === "Precio_Base") request.input(paramName, sql.Decimal(10, 2), value);
-        else if (key === "ID_Categoria_P" || key === "ID_Receta") request.input(paramName, sql.Int, value === null ? null : Number(value));
-        else if (key === "Estado") request.input(paramName, sql.Char(1), value);
-        else if (key === "Descripcion") request.input(paramName, sql.VarChar(8000), value || "");
+        if (key === "Precio_Base")
+          request.input(paramName, sql.Decimal(10, 2), value);
+        else if (key === "ID_Categoria_P" || key === "ID_Receta") {
+          const val =
+            value === null || value === "" || value === undefined || value === 0
+              ? null
+              : Number(value);
+          request.input(paramName, sql.Int, val);
+        } else if (key === "Estado")
+          request.input(paramName, sql.Char(1), value);
+        else if (key === "Descripcion")
+          request.input(paramName, sql.VarChar(8000), value || "");
         else request.input(paramName, sql.VarChar(100), value);
 
         setClause += `${key} = @${paramName}, `;
@@ -209,7 +256,7 @@ exports.updateProducto = async (req, res) => {
     // Manejo de archivos si vienen
     const archivosRenombrados = [];
     if (req.files && req.files.length > 0) {
-      // Eliminar archivos antiguos
+      // Eliminar archivos antiguos primero
       eliminarImagenesProducto(id);
 
       for (let i = 0; i < req.files.length; i++) {
@@ -232,9 +279,8 @@ exports.updateProducto = async (req, res) => {
     return res.status(200).json({
       message: "Producto actualizado correctamente",
       archivos_subidos: archivosRenombrados.length,
-      nombres_archivos: archivosRenombrados
+      nombres_archivos: archivosRenombrados,
     });
-
   } catch (err) {
     console.error("updateProducto error:", err);
     return res.status(500).json({ error: "Error al actualizar el producto" });
@@ -248,7 +294,8 @@ exports.deleteProducto = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
-    const result = await pool.request()
+    const result = await pool
+      .request()
       .input("id", sql.Int, id)
       .query("DELETE FROM Producto WHERE ID_Producto = @id");
 
@@ -256,7 +303,9 @@ exports.deleteProducto = async (req, res) => {
       return res.status(404).json({ error: "Producto no encontrado" });
     }
 
-    return res.status(200).json({ message: "Producto eliminado correctamente" });
+    return res
+      .status(200)
+      .json({ message: "Producto eliminado correctamente" });
   } catch (err) {
     console.error("deleteProducto error:", err);
     return res.status(500).json({ error: "Error al eliminar el producto" });

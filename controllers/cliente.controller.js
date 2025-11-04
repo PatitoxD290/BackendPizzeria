@@ -1,5 +1,6 @@
 const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
+const axios = require("axios");
 
 // ==============================
 // 🔄 Mapper: adapta una fila de BD al modelo Cliente
@@ -200,5 +201,103 @@ exports.deleteCliente = async (req, res) => {
   } catch (err) {
     console.error("deleteCliente error:", err);
     return res.status(500).json({ error: "Error al eliminar el cliente" });
+  }
+};
+
+// ==============================
+// 🔍 Buscar y guardar cliente por DNI o RUC
+// ==============================
+exports.buscarClientePorDocumento = async (req, res) => {
+  const { doc } = req.params;
+  const token = process.env.TOKEN;
+
+  try {
+    if (!doc || (doc.length !== 8 && doc.length !== 11)) {
+      return res.status(400).json({ error: "Documento inválido" });
+    }
+
+    const pool = await getConnection();
+
+    // 🔎 1. Verificar si ya existe en BD
+    const existe = await pool.request()
+      .input("DNI", sql.VarChar(20), doc.trim())
+      .query("SELECT * FROM Cliente WHERE DNI = @DNI");
+
+    if (existe.recordset.length > 0) {
+      return res.status(200).json({
+        message: "Cliente ya registrado",
+        cliente: existe.recordset[0],
+      });
+    }
+
+    // ⚡ 2. Consultar la API externa
+    const headers = { Authorization: `Bearer ${token}` };
+    let nombre = "";
+    let apellido = "";
+    let tipo = "";
+    let info = {};
+
+    if (doc.length === 8) {
+      // 🧍 Caso DNI
+      tipo = "DNI";
+      const { data } = await axios.get(`https://apiperu.dev/api/dni/${doc}`, { headers });
+
+      if (!data.success) {
+        return res.status(404).json({ error: "DNI no encontrado" });
+      }
+
+      info = data.data;
+      nombre = info.nombres?.trim() || "";
+      apellido = `${info.apellido_paterno || ""} ${info.apellido_materno || ""}`.trim();
+
+    } else {
+      // 🏢 Caso RUC
+      tipo = "RUC";
+      const { data } = await axios.get(`https://apiperu.dev/api/ruc/${doc}`, { headers });
+
+      if (!data.success) {
+        return res.status(404).json({ error: "RUC no encontrado" });
+      }
+
+      info = data.data;
+
+      nombre = info.nombre_o_razon_social?.trim() || "";
+
+      // 🧾 Concatenamos datos importantes en Apellido
+      const estado = info.estado || "DESCONOCIDO";
+      const condicion = info.condicion || "DESCONOCIDO";
+      const agenteRetencion = info.es_agente_de_retencion || "NO";
+      const agentePercepcion = info.es_agente_de_percepcion || "NO";
+
+      apellido = `${estado} | ${condicion} | Retención: ${agenteRetencion} | Percepción: ${agentePercepcion}`;
+    }
+
+    // 🧩 3. Insertar nuevo cliente en la BD
+    const insert = pool.request()
+      .input("DNI", sql.VarChar(20), doc.trim())
+      .input("Nombre", sql.VarChar(100), nombre || null)
+      .input("Apellido", sql.VarChar(200), apellido || null)
+      .input("Telefono", sql.VarChar(20), null)
+      .input("Fecha_Registro", sql.DateTime, new Date());
+
+    await insert.query(`
+      INSERT INTO Cliente (DNI, Nombre, Apellido, Telefono, Fecha_Registro)
+      VALUES (@DNI, @Nombre, @Apellido, @Telefono, @Fecha_Registro);
+    `);
+
+    // 🔁 4. Consultar y devolver cliente recién creado
+    const nuevo = await pool.request()
+      .input("DNI", sql.VarChar(20), doc.trim())
+      .query("SELECT TOP 1 * FROM Cliente WHERE DNI = @DNI ORDER BY ID_Cliente DESC");
+
+    return res.status(201).json({
+      message: "Cliente creado correctamente",
+      tipo,
+      cliente: nuevo.recordset[0],
+    });
+
+  } catch (error) {
+    console.error("Error en buscarClientePorDocumento:", error?.response?.data || error.message);
+    return res.status(500).json({ error: "Error al buscar o guardar el cliente" });
   }
 };
