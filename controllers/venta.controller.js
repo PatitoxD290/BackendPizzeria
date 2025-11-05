@@ -97,6 +97,8 @@ exports.getVentas = async (_req, res) => {
       SELECT 
         v.ID_Venta,
         v.ID_Pedido,
+        v.Tipo_Venta,
+        v.Fecha_Registro,
         c.Nombre AS Cliente_Nombre,
         p.Estado_P,
         v.Metodo_Pago,
@@ -109,13 +111,19 @@ exports.getVentas = async (_req, res) => {
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
       LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
       LEFT JOIN Producto pr ON pd.ID_Producto = pr.ID_Producto
-      GROUP BY v.ID_Venta, v.ID_Pedido, c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total
+      GROUP BY 
+        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
+        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total
       ORDER BY v.ID_Venta DESC
     `;
+
     const result = await pool.request().query(sqlQuery);
+
     const ventas = (result.recordset || []).map(r => ({
       ID_Venta: r.ID_Venta,
       ID_Pedido: r.ID_Pedido,
+      Tipo_Venta: r.Tipo_Venta,
+      Fecha_Registro: r.Fecha_Registro,
       Cliente_Nombre: r.Cliente_Nombre,
       Estado_Pedido: r.Estado_P,
       Metodo_Pago: r.Metodo_Pago,
@@ -124,12 +132,15 @@ exports.getVentas = async (_req, res) => {
       Total: r.Total,
       Detalles_Pedido: r.Detalles_Pedido || ""
     }));
+
     res.status(200).json(ventas);
+
   } catch (err) {
     console.error("getVentas error:", err);
     res.status(500).json({ error: "Error al obtener las ventas" });
   }
 };
+
 
 // ==============================
 // 🔹 Obtener venta por ID
