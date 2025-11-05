@@ -303,3 +303,114 @@ exports.datosBoletaVenta = async (req, res) => {
     res.status(500).json({ error: "Error al obtener los datos de la venta" });
   }
 };
+
+// ==============================
+// 🔹 Detalles de Venta
+// ==============================
+exports.detallesVenta = async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "Se requiere ID de Venta" });
+
+    const pool = await getConnection();
+
+    // Esta es la consulta que creamos, adaptada con un WHERE y JOINs adicionales
+    // para los detalles (Tamano) que estaban en tu función original.
+    const sqlQuery = `
+      SELECT
+          v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total, v.Fecha_Registro,
+          p.ID_Cliente, p.ID_Usuario, p.SubTotal, p.Notas,
+          
+          pd.ID_Pedido_D, pd.ID_Producto, pd.ID_Tamano, pd.Cantidad, pd.PrecioTotal,
+          
+          c.Nombre AS Nombre_Cliente,
+          CASE WHEN LEN(c.DNI) > 8 THEN NULL ELSE c.Apellido END AS Apellido_Cliente,
+          c.DNI,
+          
+          u.Perfil AS Perfil_Usuario,
+          pr.Nombre AS Nombre_Producto,
+          t.Tamano AS Tamano_Nombre
+      FROM
+          ventas v
+      JOIN
+          Pedido p ON v.ID_Pedido = p.ID_Pedido
+      JOIN
+          Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      JOIN
+          Cliente c ON p.ID_Cliente = c.ID_Cliente
+      JOIN
+          Usuario u ON p.ID_Usuario = u.ID_Usuario
+      JOIN
+          Producto pr ON pd.ID_Producto = pr.ID_Producto
+      LEFT JOIN  -- Usamos LEFT JOIN por si un producto no tiene tamaño
+          Tamano t ON pd.ID_Tamano = t.ID_Tamano
+      WHERE
+          v.ID_Venta = @id
+      ORDER BY
+          pd.ID_Pedido_D;
+    `;
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(sqlQuery);
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    // --- Procesamos los resultados ---
+    // Como la consulta devuelve MÚLTIPLES filas (una por cada producto del pedido),
+    // tenemos que agrupar la información.
+
+    // 1. Tomamos la info principal de la primera fila (es la misma en todas)
+    const firstRow = result.recordset[0];
+
+    const ventaInfo = {
+      ID_Venta: firstRow.ID_Venta,
+      ID_Pedido: firstRow.ID_Pedido,
+      Tipo_Venta: firstRow.Tipo_Venta,
+      Metodo_Pago: firstRow.Metodo_Pago,
+      Lugar_Emision: firstRow.Lugar_Emision,
+      IGV: firstRow.IGV,
+      Total: firstRow.Total,
+      Fecha_Registro: firstRow.Fecha_Registro,
+      Notas_Pedido: firstRow.Notas || ""
+    };
+
+    const clienteInfo = {
+      ID_Cliente: firstRow.ID_Cliente,
+      Nombre: firstRow.Nombre_Cliente,
+      Apellido: firstRow.Apellido_Cliente, // Ya viene con la lógica (NULL o Apellido)
+      DNI: firstRow.DNI
+    };
+
+    const usuarioInfo = {
+      ID_Usuario: firstRow.ID_Usuario,
+      Perfil: firstRow.Perfil_Usuario
+    };
+
+    // 2. Mapeamos TODAS las filas para crear el array de detalles
+    const detallesPedido = result.recordset.map(row => ({
+      ID_Pedido_D: row.ID_Pedido_D,
+      ID_Producto: row.ID_Producto,
+      Producto_Nombre: row.Nombre_Producto,
+      ID_Tamano: row.ID_Tamano,
+      Tamano_Nombre: row.Tamano_Nombre || "Único", // Fallback por si es NULL
+      Cantidad: row.Cantidad,
+      PrecioTotal: row.PrecioTotal // Asumo que este campo existe en Pedido_Detalle
+    }));
+
+    // 3. Enviamos la respuesta estructurada
+    res.status(200).json({
+      exito: true,
+      venta: ventaInfo,
+      cliente: clienteInfo,
+      usuario: usuarioInfo,
+      detalles: detallesPedido
+    });
+
+  } catch (err) {
+    console.error("detallesVenta error:", err);
+    res.status(500).json({ error: "Error al obtener los detalles de la venta" });
+  }
+};
