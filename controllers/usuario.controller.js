@@ -30,7 +30,12 @@ function mapToUsuario(row = {}) {
 exports.getUsuarios = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT ID_Usuario, Perfil, Correo, Roll, Estado, Fecha_Registro FROM Usuario ORDER BY ID_Usuario DESC");
+    const result = await pool.request().query(`
+      SELECT ID_Usuario, Perfil, Correo, Password, Roll, Estado, Fecha_Registro 
+      FROM Usuario 
+      ORDER BY ID_Usuario DESC
+    `);
+
     const usuarios = (result.recordset || []).map(mapToUsuario);
     return res.status(200).json(usuarios);
   } catch (err) {
@@ -39,6 +44,7 @@ exports.getUsuarios = async (_req, res) => {
   }
 };
 
+
 // Obtener usuario por ID
 exports.getUsuarioById = async (req, res) => {
   const { id } = req.params;
@@ -46,7 +52,11 @@ exports.getUsuarioById = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT ID_Usuario, Perfil, Correo, Roll, Estado, Fecha_Registro FROM Usuario WHERE ID_Usuario = @id");
+      .query(`
+        SELECT ID_Usuario, Perfil, Correo, Password, Roll, Estado, Fecha_Registro 
+        FROM Usuario 
+        WHERE ID_Usuario = @id
+      `);
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Usuario no encontrado" });
@@ -58,6 +68,7 @@ exports.getUsuarioById = async (req, res) => {
     return res.status(500).json({ error: "Error al obtener el usuario" });
   }
 };
+
 
 // Crear usuario (se encripta password)
 // Nota: aqui se requiere Correo y Password y Perfil; ajusta si quieres permitir registro público
@@ -103,7 +114,7 @@ exports.createUsuario = async (req, res) => {
 // Actualizar usuario (parcial, encripta password si llega)
 exports.updateUsuario = async (req, res) => {
   const { id } = req.params;
-  const { Perfil, Roll, Estado, Password } = req.body;
+  const { Perfil, Roll, Estado, Correo, Password } = req.body; 
 
   try {
     const pool = await getConnection();
@@ -112,6 +123,7 @@ exports.updateUsuario = async (req, res) => {
 
     let updateParts = [];
     if (Perfil !== undefined) { updateParts.push("Perfil = @Perfil"); request.input("Perfil", sql.VarChar(50), Perfil); }
+    if (Correo !== undefined) { updateParts.push("Correo = @Correo"); request.input("Correo", sql.VarChar(100), Correo); } 
     if (Roll !== undefined) { updateParts.push("Roll = @Roll"); request.input("Roll", sql.Char(1), Roll); }
     if (Estado !== undefined) { updateParts.push("Estado = @Estado"); request.input("Estado", sql.Char(1), Estado); }
 
@@ -185,3 +197,41 @@ exports.changePassword = async (req, res) => {
     return res.status(500).json({ error: "Error al cambiar la contraseña" });
   }
 };
+
+// Cambiar estado (Activo/Inactivo)
+exports.statusUsuario = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+
+    // Obtener estado actual
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT Estado FROM Usuario WHERE ID_Usuario = @id");
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    }
+
+    const estadoActual = result.recordset[0].Estado;
+    const nuevoEstado = estadoActual === "A" ? "I" : "A";
+
+    // Actualizar estado
+    await pool.request()
+      .input("id", sql.Int, id)
+      .input("Estado", sql.Char(1), nuevoEstado)
+      .query("UPDATE Usuario SET Estado = @Estado WHERE ID_Usuario = @id");
+
+    return res.status(200).json({
+      message: `Estado actualizado correctamente`,
+      estado: nuevoEstado
+    });
+
+  } catch (err) {
+    console.error("statusUsuario error:", err);
+    return res.status(500).json({ error: "Error al cambiar el estado del usuario" });
+  }
+};
+
+
