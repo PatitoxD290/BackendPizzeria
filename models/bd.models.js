@@ -39,7 +39,7 @@ const Insumo = {
   Unidad_Med: "",
   ID_Categoria_I: 0,
   Stock_Min: 0,
-  Stock_Max: 0,
+  Stock_Max: 1000,
   Estado: "D", // D=Disponible, A=Agotado
   Fecha_Registro: ""
 };
@@ -72,15 +72,35 @@ const Producto = {
   ID_Producto: 0,
   Nombre: "",
   Descripcion: "",
-  Precio_Base: 0.0,
   ID_Categoria_P: 0,
   ID_Receta: null,
+  Cantidad_Disponible: 0,
+  Estado: "A", // A=Activo, I=Inactivo, G=Agotado
+  Fecha_Registro: ""
+};
+
+// ===============================
+// 8. TAMAÑO
+// ===============================
+const Tamano = {
+  ID_Tamano: 0,
+  Tamano: ""
+};
+
+// ===============================
+// 9. PRODUCTO_TAMANO (Nuevo)
+// ===============================
+const ProductoTamano = {
+  ID_Producto_T: 0,
+  ID_Producto: 0,
+  ID_Tamano: 0,
+  Precio: 0.0,
   Estado: "A", // A=Activo, I=Inactivo
   Fecha_Registro: ""
 };
 
 // ===============================
-// 8. STOCK
+// 10. STOCK
 // ===============================
 const Stock = {
   ID_Stock: 0,
@@ -95,7 +115,7 @@ const Stock = {
 };
 
 // ===============================
-// 9. STOCK MOVIMIENTO
+// 11. STOCK MOVIMIENTO
 // ===============================
 const StockMovimiento = {
   ID_Stock_M: 0,
@@ -109,7 +129,7 @@ const StockMovimiento = {
 };
 
 // ===============================
-// 10. CUPONES
+// 12. CUPONES
 // ===============================
 const Cupon = {
   ID_Cupon: 0,
@@ -127,7 +147,7 @@ const Cupon = {
 };
 
 // ===============================
-// 11. CLIENTE
+// 13. CLIENTE
 // ===============================
 const Cliente = {
   ID_Cliente: 0,
@@ -139,16 +159,7 @@ const Cliente = {
 };
 
 // ===============================
-// 12. TAMAÑO
-// ===============================
-const Tamano = {
-  ID_Tamano: 0,
-  Tamano: "",
-  Variacion_Precio: 0.0
-};
-
-// ===============================
-// 13. USUARIO
+// 14. USUARIO
 // ===============================
 const Usuario = {
   ID_Usuario: 0,
@@ -161,7 +172,7 @@ const Usuario = {
 };
 
 // ===============================
-// 14. PEDIDO
+// 15. PEDIDO
 // ===============================
 const Pedido = {
   ID_Pedido: 0,
@@ -175,19 +186,18 @@ const Pedido = {
 };
 
 // ===============================
-// 15. PEDIDO DETALLE
+// 16. PEDIDO DETALLE (Actualizado)
 // ===============================
 const PedidoDetalle = {
   ID_Pedido_D: 0,
   ID_Pedido: 0,
-  ID_Producto: 0,
-  ID_Tamano: 0,
+  ID_Producto_T: 0,
   Cantidad: 1,
   PrecioTotal: 0.0
 };
 
 // ===============================
-// 16. USO CUPÓN
+// 17. USO CUPÓN
 // ===============================
 const UsoCupon = {
   ID_Uso_C: 0,
@@ -199,7 +209,7 @@ const UsoCupon = {
 };
 
 // ===============================
-// 17. VENTAS
+// 18. VENTAS
 // ===============================
 const Venta = {
   ID_Venta: 0,
@@ -213,7 +223,7 @@ const Venta = {
 };
 
 // ===============================
-// 18. DELIVERY
+// 19. DELIVERY
 // ===============================
 const Delivery = {
   ID_Delivery: 0,
@@ -223,7 +233,7 @@ const Delivery = {
 };
 
 // ===============================
-// 19. COMBOS
+// 20. COMBOS
 // ===============================
 const Combo = {
   ID_Combo: 0,
@@ -234,18 +244,17 @@ const Combo = {
 };
 
 // ===============================
-// 20. COMBOS DETALLE
+// 21. COMBOS DETALLE (Actualizado)
 // ===============================
 const ComboDetalle = {
   ID_Combo_D: 0,
   ID_Combo: 0,
-  ID_Producto: 0,
-  ID_Tamano: 0,
+  ID_Producto_T: 0,
   Cantidad: 1
 };
 
 // ===============================
-// EXPORTAR TODOS LOS MODELOS
+// EXPORTAR MODELOS
 // ===============================
 module.exports = {
   CategoriaProducto,
@@ -255,11 +264,12 @@ module.exports = {
   Receta,
   RecetaDetalle,
   Producto,
+  Tamano,
+  ProductoTamano,
   Stock,
   StockMovimiento,
   Cupon,
   Cliente,
-  Tamano,
   Usuario,
   Pedido,
   PedidoDetalle,

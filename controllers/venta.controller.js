@@ -29,9 +29,9 @@ function mapToVenta(row = {}) {
 }
 
 // ==============================
-// 🔹 Función helper: calcular descuentos, IGV y total
+// 🔹 Función helper: calcular descuentos, IGV y total (IGV = 0)
 // ==============================
-async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 18) {
+async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar default a 0
   // 1) Obtener subtotal del pedido
   const pedidoRes = await pool.request()
     .input("ID_Pedido", sql.Int, ID_Pedido)
@@ -81,14 +81,17 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 18) {
   }
 
   const subtotalConCupon = Math.max(0, pedidoSubTotal - descuentoMonto);
-  const igvMonto = Number((subtotalConCupon * (IGV_Porcentaje / 100)).toFixed(2));
-  const totalFinal = Number((subtotalConCupon + igvMonto).toFixed(2));
+  
+  // 🔹 CAMBIO PRINCIPAL: IGV siempre será 0
+  const igvMonto = 0; // IGV fijo en 0
+  
+  // 🔹 Total será igual al subtotal con cupón (sin agregar IGV)
+  const totalFinal = Number(subtotalConCupon.toFixed(2));
 
   return { pedidoSubTotal, descuentoMonto, subtotalConCupon, igvMonto, totalFinal, cuponAplicado };
 }
-
 // ==============================
-// 🔹 Listar ventas enriquecido
+// 🔹 Listar ventas enriquecido - CORREGIDO
 // ==============================
 exports.getVentas = async (_req, res) => {
   try {
@@ -105,12 +108,14 @@ exports.getVentas = async (_req, res) => {
         v.Lugar_Emision,
         v.IGV,
         v.Total,
-        STRING_AGG(CONCAT(pr.Nombre, ' x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
       LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
-      LEFT JOIN Producto pr ON pd.ID_Producto = pr.ID_Producto
+      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
       GROUP BY 
         v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
         c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total
@@ -141,7 +146,6 @@ exports.getVentas = async (_req, res) => {
   }
 };
 
-
 // ==============================
 // 🔹 Obtener venta por ID
 // ==============================
@@ -162,10 +166,10 @@ exports.getVentaById = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Crear venta
+// 🔹 Crear venta (sin IGV)
 // ==============================
 exports.createVenta = async (req, res) => {
-  const { ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, IGV_Porcentaje } = req.body;
+  const { ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision } = req.body; // Quitar IGV_Porcentaje
   if (!ID_Pedido || !Tipo_Venta || !Metodo_Pago) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -176,8 +180,8 @@ exports.createVenta = async (req, res) => {
   try {
     await transaction.begin();
 
-    // Calcular montos
-    const montos = await calcularMontos(transaction, ID_Pedido, IGV_Porcentaje);
+    // Calcular montos (IGV será 0 automáticamente)
+    const montos = await calcularMontos(transaction, ID_Pedido); // Sin pasar IGV_Porcentaje
 
     // Insertar venta
     const insertRes = await new sql.Request(transaction)
@@ -185,8 +189,8 @@ exports.createVenta = async (req, res) => {
       .input("Tipo_Venta", sql.VarChar(1), Tipo_Venta)
       .input("Metodo_Pago", sql.Char(1), Metodo_Pago)
       .input("Lugar_Emision", sql.Char(1), Lugar_Emision || "B")
-      .input("IGV", sql.Decimal(10,2), montos.igvMonto)
-      .input("Total", sql.Decimal(10,2), montos.totalFinal)
+      .input("IGV", sql.Decimal(10,2), montos.igvMonto) // Esto será 0
+      .input("Total", sql.Decimal(10,2), montos.totalFinal) // Esto será igual al subtotal con cupón
       .query(`
         INSERT INTO Ventas (ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, IGV, Total)
         OUTPUT INSERTED.ID_Venta
@@ -212,9 +216,8 @@ exports.createVenta = async (req, res) => {
       SubTotal_Pedido: montos.pedidoSubTotal,
       Descuento_Aplicado: montos.descuentoMonto,
       SubTotal_Con_Cupon: montos.subtotalConCupon,
-      IGV_Porcentaje: IGV_Porcentaje || 18,
-      IGV: montos.igvMonto,
-      Total: montos.totalFinal,
+      IGV: montos.igvMonto, // Esto será 0
+      Total: montos.totalFinal, // Esto será igual al subtotal con cupón
       Cupon_Aplicado: montos.cuponAplicado ? {
         ID_Cupon: montos.cuponAplicado.ID_Cupon,
         Tipo_Desc: montos.cuponAplicado.Tipo_Desc,
@@ -230,7 +233,7 @@ exports.createVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Datos de boleta/factura
+// 🔹 Datos de boleta/factura - CORREGIDO (sin IGV)
 // ==============================
 exports.datosBoletaVenta = async (req, res) => {
   try {
@@ -249,17 +252,23 @@ exports.datosBoletaVenta = async (req, res) => {
     if (!ventaRes.recordset.length) return res.status(404).json({ error: "Venta no encontrada" });
     const venta = ventaRes.recordset[0];
 
-    const montos = await calcularMontos(pool, venta.ID_Pedido, null);
+    // Usar la función calcularMontos actualizada (IGV será 0)
+    const montos = await calcularMontos(pool, venta.ID_Pedido);
 
     const detallesRes = await pool.request()
       .input("ID_Pedido", sql.Int, venta.ID_Pedido)
       .query(`
-        SELECT pd.ID_Pedido_D, pd.ID_Producto, pd.ID_Tamano, pd.Cantidad, pd.PrecioTotal,
-               pr.Nombre AS Producto_Nombre,
-               t.Tamano AS Tamano_Nombre
+        SELECT 
+          pd.ID_Pedido_D, 
+          pd.ID_Producto_T, 
+          pd.Cantidad, 
+          pd.PrecioTotal,
+          pr.Nombre AS Producto_Nombre,
+          t.Tamano AS Tamano_Nombre
         FROM Pedido_Detalle pd
-        LEFT JOIN Producto pr ON pd.ID_Producto = pr.ID_Producto
-        LEFT JOIN Tamano t ON pd.ID_Tamano = t.ID_Tamano
+        LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+        LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+        LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         WHERE pd.ID_Pedido = @ID_Pedido
         ORDER BY pd.ID_Pedido_D
       `);
@@ -278,8 +287,8 @@ exports.datosBoletaVenta = async (req, res) => {
         SubTotal_Original: montos.pedidoSubTotal,
         Descuento_Aplicado: montos.descuentoMonto,
         SubTotal_Con_Cupon: montos.subtotalConCupon,
-        IGV: montos.igvMonto,
-        Total: montos.totalFinal,
+        IGV: montos.igvMonto, // Esto será 0
+        Total: montos.totalFinal, // Esto será igual al subtotal con cupón
         Notas: venta.Notas || ""
       },
       cupon: montos.cuponAplicado ? {
@@ -289,9 +298,8 @@ exports.datosBoletaVenta = async (req, res) => {
       } : null,
       detalles: detallesRes.recordset.map(d => ({
         ID_Pedido_D: d.ID_Pedido_D,
-        ID_Producto: d.ID_Producto,
+        ID_Producto_T: d.ID_Producto_T,
         Producto_Nombre: d.Producto_Nombre,
-        ID_Tamano: d.ID_Tamano,
         Tamano_Nombre: d.Tamano_Nombre,
         Cantidad: d.Cantidad,
         PrecioTotal: d.PrecioTotal
@@ -305,7 +313,7 @@ exports.datosBoletaVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Detalles de Venta
+// 🔹 Detalles de Venta - CORREGIDO
 // ==============================
 exports.detallesVenta = async (req, res) => {
   try {
@@ -314,14 +322,12 @@ exports.detallesVenta = async (req, res) => {
 
     const pool = await getConnection();
 
-    // Esta es la consulta que creamos, adaptada con un WHERE y JOINs adicionales
-    // para los detalles (Tamano) que estaban en tu función original.
     const sqlQuery = `
       SELECT
           v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total, v.Fecha_Registro,
           p.ID_Cliente, p.ID_Usuario, p.SubTotal, p.Notas,
           
-          pd.ID_Pedido_D, pd.ID_Producto, pd.ID_Tamano, pd.Cantidad, pd.PrecioTotal,
+          pd.ID_Pedido_D, pd.ID_Producto_T, pd.Cantidad, pd.PrecioTotal,
           
           c.Nombre AS Nombre_Cliente,
           CASE WHEN LEN(c.DNI) > 8 THEN NULL ELSE c.Apellido END AS Apellido_Cliente,
@@ -340,10 +346,12 @@ exports.detallesVenta = async (req, res) => {
           Cliente c ON p.ID_Cliente = c.ID_Cliente
       JOIN
           Usuario u ON p.ID_Usuario = u.ID_Usuario
-      JOIN
-          Producto pr ON pd.ID_Producto = pr.ID_Producto
-      LEFT JOIN  -- Usamos LEFT JOIN por si un producto no tiene tamaño
-          Tamano t ON pd.ID_Tamano = t.ID_Tamano
+      LEFT JOIN
+          Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+      LEFT JOIN
+          Producto pr ON pt.ID_Producto = pr.ID_Producto
+      LEFT JOIN
+          Tamano t ON pt.ID_Tamano = t.ID_Tamano
       WHERE
           v.ID_Venta = @id
       ORDER BY
@@ -358,11 +366,7 @@ exports.detallesVenta = async (req, res) => {
       return res.status(404).json({ error: "Venta no encontrada" });
     }
 
-    // --- Procesamos los resultados ---
-    // Como la consulta devuelve MÚLTIPLES filas (una por cada producto del pedido),
-    // tenemos que agrupar la información.
-
-    // 1. Tomamos la info principal de la primera fila (es la misma en todas)
+    // Procesamos los resultados
     const firstRow = result.recordset[0];
 
     const ventaInfo = {
@@ -380,7 +384,7 @@ exports.detallesVenta = async (req, res) => {
     const clienteInfo = {
       ID_Cliente: firstRow.ID_Cliente,
       Nombre: firstRow.Nombre_Cliente,
-      Apellido: firstRow.Apellido_Cliente, // Ya viene con la lógica (NULL o Apellido)
+      Apellido: firstRow.Apellido_Cliente,
       DNI: firstRow.DNI
     };
 
@@ -389,18 +393,17 @@ exports.detallesVenta = async (req, res) => {
       Perfil: firstRow.Perfil_Usuario
     };
 
-    // 2. Mapeamos TODAS las filas para crear el array de detalles
+    // Mapeamos TODAS las filas para crear el array de detalles
     const detallesPedido = result.recordset.map(row => ({
       ID_Pedido_D: row.ID_Pedido_D,
-      ID_Producto: row.ID_Producto,
+      ID_Producto_T: row.ID_Producto_T,
       Producto_Nombre: row.Nombre_Producto,
-      ID_Tamano: row.ID_Tamano,
-      Tamano_Nombre: row.Tamano_Nombre || "Único", // Fallback por si es NULL
+      Tamano_Nombre: row.Tamano_Nombre || "Único",
       Cantidad: row.Cantidad,
-      PrecioTotal: row.PrecioTotal // Asumo que este campo existe en Pedido_Detalle
+      PrecioTotal: row.PrecioTotal
     }));
 
-    // 3. Enviamos la respuesta estructurada
+    // Enviamos la respuesta estructurada
     res.status(200).json({
       exito: true,
       venta: ventaInfo,

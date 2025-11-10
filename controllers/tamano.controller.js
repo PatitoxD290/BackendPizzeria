@@ -2,20 +2,18 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
-// 🔄 Mapper: adapta una fila SQL al modelo Tamano
+// 🔄 Mapper: adapta fila SQL al modelo
 // ==============================
 function mapToTamano(row = {}) {
   const template = bdModel?.Tamano || {
     ID_Tamano: 0,
-    Tamano: "",
-    Variacion_Precio: 0.0
+    Tamano: ""
   };
 
   return {
     ...template,
     ID_Tamano: row.ID_Tamano ?? template.ID_Tamano,
-    Tamano: row.Tamano ?? template.Tamano,
-    Variacion_Precio: row.Variacion_Precio ?? template.Variacion_Precio
+    Tamano: row.Tamano ?? template.Tamano
   };
 }
 
@@ -25,9 +23,13 @@ function mapToTamano(row = {}) {
 exports.getTamanos = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM Tamano ORDER BY Tamano ASC");
-    const tamanos = (result.recordset || []).map(mapToTamano);
-    return res.status(200).json(tamanos);
+    const result = await pool.request().query(`
+      SELECT ID_Tamano, Tamano
+      FROM Tamano
+      ORDER BY Tamano ASC
+    `);
+
+    return res.status(200).json((result.recordset || []).map(mapToTamano));
   } catch (err) {
     console.error("getTamanos error:", err);
     return res.status(500).json({ error: "Error al obtener los tamaños" });
@@ -39,11 +41,16 @@ exports.getTamanos = async (_req, res) => {
 // ==============================
 exports.getTamanoById = async (req, res) => {
   const { id } = req.params;
+
   try {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query("SELECT * FROM Tamano WHERE ID_Tamano = @id");
+      .query(`
+        SELECT ID_Tamano, Tamano
+        FROM Tamano
+        WHERE ID_Tamano = @id
+      `);
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Tamaño no encontrado" });
@@ -60,7 +67,7 @@ exports.getTamanoById = async (req, res) => {
 // 📗 Crear un nuevo tamaño
 // ==============================
 exports.createTamano = async (req, res) => {
-  const { Tamano, Variacion_Precio } = req.body;
+  const { Tamano } = req.body;
 
   try {
     if (!Tamano) {
@@ -68,23 +75,17 @@ exports.createTamano = async (req, res) => {
     }
 
     const pool = await getConnection();
-    const request = pool.request()
+    const result = await pool.request()
       .input("Tamano", sql.VarChar(50), Tamano)
-      .input("Variacion_Precio", sql.Decimal(10, 2), (Variacion_Precio ?? 0.0))
-      .input("Fecha_Registro", sql.DateTime, new Date()); // no hay columna Fecha_Registro en tu DDL para Tamano, pero si la añades se puede usar
-
-    // Insertar y devolver ID
-    const result = await request.query(`
-      INSERT INTO Tamano (Tamano, Variacion_Precio)
-      VALUES (@Tamano, @Variacion_Precio);
-      SELECT SCOPE_IDENTITY() AS ID_Tamano;
-    `);
-
-    const id = result.recordset && result.recordset[0] ? result.recordset[0].ID_Tamano : null;
+      .query(`
+        INSERT INTO Tamano (Tamano)
+        OUTPUT INSERTED.ID_Tamano
+        VALUES (@Tamano)
+      `);
 
     return res.status(201).json({
       message: "Tamaño registrado correctamente",
-      ID_Tamano: id
+      ID_Tamano: result.recordset[0].ID_Tamano
     });
   } catch (err) {
     console.error("createTamano error:", err);
@@ -97,29 +98,22 @@ exports.createTamano = async (req, res) => {
 // ==============================
 exports.updateTamano = async (req, res) => {
   const { id } = req.params;
-  const { Tamano, Variacion_Precio } = req.body;
+  const { Tamano } = req.body;
 
   try {
-    const pool = await getConnection();
-    const request = pool.request();
-    request.input("id", sql.Int, id);
-
-    let updateParts = [];
-    if (Tamano !== undefined) {
-      updateParts.push("Tamano = @Tamano");
-      request.input("Tamano", sql.VarChar(50), Tamano);
-    }
-    if (Variacion_Precio !== undefined) {
-      updateParts.push("Variacion_Precio = @Variacion_Precio");
-      request.input("Variacion_Precio", sql.Decimal(10, 2), Variacion_Precio);
-    }
-
-    if (updateParts.length === 0) {
+    if (Tamano === undefined) {
       return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
     }
 
-    const query = `UPDATE Tamano SET ${updateParts.join(", ")} WHERE ID_Tamano = @id`;
-    const result = await request.query(query);
+    const pool = await getConnection();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("Tamano", sql.VarChar(50), Tamano)
+      .query(`
+        UPDATE Tamano
+        SET Tamano = @Tamano
+        WHERE ID_Tamano = @id
+      `);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Tamaño no encontrado" });

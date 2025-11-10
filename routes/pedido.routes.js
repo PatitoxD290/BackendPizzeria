@@ -13,4 +13,6 @@ router.put("/pedidos/:id", verifyToken, pedidoController.updatePedidoConDetalle)
 
 router.get("/pedidos/:pedido_id/notas", verifyToken, pedidoController.getDetallesConNotas);
 
+router.patch("/pedidos/:id/status", verifyToken, pedidoController.statusPedido);
+
 module.exports = router;

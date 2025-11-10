@@ -40,7 +40,7 @@ app.use(helmet());
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:4200";
 const corsOptions = {
   origin: FRONTEND_URL,
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT","PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   credentials: true,
 };

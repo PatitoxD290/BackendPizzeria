@@ -32,9 +32,8 @@ function mapToDetallePedido(row = {}) {
   const template = bdModel?.PedidoDetalle || {
     ID_Pedido_D: 0,
     ID_Pedido: 0,
-    ID_Producto: 0,
-    ID_Tamano: null,
-    Cantidad: 0,
+    ID_Producto_T: 0,
+    Cantidad: 1,
     PrecioTotal: 0.0
   };
 
@@ -42,39 +41,34 @@ function mapToDetallePedido(row = {}) {
     ...template,
     ID_Pedido_D: row.ID_Pedido_D ?? template.ID_Pedido_D,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
-    ID_Producto: row.ID_Producto ?? template.ID_Producto,
-    ID_Tamano: row.ID_Tamano ?? template.ID_Tamano,
+    ID_Producto_T: row.ID_Producto_T ?? template.ID_Producto_T,
     Cantidad: row.Cantidad ?? template.Cantidad,
     PrecioTotal: row.PrecioTotal ?? template.PrecioTotal
   };
 }
 
+
 // ---------------------------------
 // Helper: obtener precio unitario (precio_base + variacion)
 // ---------------------------------
-async function calcularPrecioUnitario(transaction, ID_Producto, ID_Tamano) {
-  // obtener Precio_Base del producto
-  const reqProd = new sql.Request(transaction);
-  reqProd.input("ID_Producto", sql.Int, ID_Producto);
-  const prodRes = await reqProd.query("SELECT Precio_Base FROM Producto WHERE ID_Producto = @ID_Producto");
+async function calcularPrecioUnitario(transaction, ID_Producto_T) {
+  const req = new sql.Request(transaction);
+  const result = await req
+    .input("ID_Producto_T", sql.Int, ID_Producto_T)
+    .query(`
+      SELECT Precio
+      FROM Producto_Tamano
+      WHERE ID_Producto_T = @ID_Producto_T
+        AND Estado = 'A'
+    `);
 
-  if (!prodRes.recordset.length) {
-    throw new Error(`Producto no encontrado: ${ID_Producto}`);
-  }
-  const precioBase = Number(prodRes.recordset[0].Precio_Base ?? 0);
-
-  // obtener Variacion_Precio del Tamano si aplica
-  let variacion = 0.0;
-  if (ID_Tamano) {
-    const reqTam = new sql.Request(transaction);
-    reqTam.input("ID_Tamano", sql.Int, ID_Tamano);
-    const tamRes = await reqTam.query("SELECT Variacion_Precio FROM Tamano WHERE ID_Tamano = @ID_Tamano");
-    variacion = tamRes.recordset.length ? Number(tamRes.recordset[0].Variacion_Precio ?? 0) : 0.0;
+  if (result.recordset.length === 0) {
+    throw new Error("No existe el producto/tamaño seleccionado o está inactivo.");
   }
 
-  const precioUnitario = Number((precioBase + variacion).toFixed(2));
-  return precioUnitario;
+  return Number(result.recordset[0].Precio);
 }
+
 
 // Crear pedido con detalle (transaccional)
 // ahora recalculamos todos los subtotales en servidor
@@ -85,7 +79,7 @@ exports.createPedidoConDetalle = async (req, res) => {
     Hora_Pedido,
     Estado_P,
     Notas,
-    detalles // array de { ID_Producto, ID_Tamano, Cantidad }
+    detalles // array de { ID_Producto_T, Cantidad }
   } = req.body;
 
   try {
@@ -135,19 +129,20 @@ exports.createPedidoConDetalle = async (req, res) => {
       let subTotalAcumulado = 0.0;
 
       for (const d of detalles) {
-        const { ID_Producto, ID_Tamano, Cantidad } = d;
+        const { ID_Producto_T, Cantidad } = d;
 
-        if (!ID_Producto || Cantidad == null) {
-          await transaction.rollback();
-          return res.status(400).json({
-            error: "Faltan campos obligatorios en detalle: ID_Producto o Cantidad"
-          });
-        }
+       if (!ID_Producto_T || Cantidad == null) {
+        await transaction.rollback();
+        return res.status(400).json({
+          error: "Faltan campos obligatorios en detalle: ID_Producto_T o Cantidad"
+        });
+      }
+
 
         // calcular precio unitario
         let precioUnitario;
         try {
-          precioUnitario = await calcularPrecioUnitario(transaction, ID_Producto, ID_Tamano || null);
+          precioUnitario = await calcularPrecioUnitario(transaction, ID_Producto_T);
         } catch (err) {
           await transaction.rollback();
           return res.status(400).json({ error: err.message });
@@ -159,16 +154,15 @@ exports.createPedidoConDetalle = async (req, res) => {
         const reqDet = new sql.Request(transaction);
         await reqDet
           .input("ID_Pedido", sql.Int, pedido_id)
-          .input("ID_Producto", sql.Int, ID_Producto)
-          .input("ID_Tamano", sql.Int, ID_Tamano || null)
+          .input("ID_Producto_T", sql.Int, ID_Producto_T)
           .input("Cantidad", sql.Int, Cantidad)
           .input("PrecioTotal", sql.Decimal(10, 2), subtotalLinea)
           .query(`
             INSERT INTO Pedido_Detalle (
-              ID_Pedido, ID_Producto, ID_Tamano,
+              ID_Pedido, ID_Producto_T,
               Cantidad, PrecioTotal
             ) VALUES (
-              @ID_Pedido, @ID_Producto, @ID_Tamano,
+              @ID_Pedido, @ID_Producto_T,
               @Cantidad, @PrecioTotal
             )
          `);
@@ -219,54 +213,38 @@ exports.getDetallesConNotas = async (req, res) => {
   try {
     const pool = await getConnection();
 
-    // Obtener detalles del pedido
-    const detallesResult = await pool.request()
+    const result = await pool.request()
       .input("ID_Pedido", sql.Int, pedido_id)
-      .query("SELECT * FROM Pedido_Detalle WHERE ID_Pedido = @ID_Pedido");
+      .query(`
+        SELECT 
+          d.Cantidad,
+          p.Nombre AS nombre_producto,
+          t.Tamano AS nombre_tamano
+        FROM Pedido_Detalle d
+        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        WHERE d.ID_Pedido = @ID_Pedido
+      `);
 
-    if (!detallesResult.recordset.length) {
-      return res.status(404).json({ error: "Detalles no encontrados para el pedido" });
+    if (!result.recordset.length) {
+      return res.status(404).json({ error: "No hay detalles para este pedido" });
     }
 
-    // Obtener Notas del Pedido
-    const pedidoResult = await pool.request()
-      .input("ID_Pedido", sql.Int, pedido_id)
-      .query("SELECT Notas FROM Pedido WHERE ID_Pedido = @ID_Pedido");
+    const detallesTexto = result.recordset
+      .map(d => `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`)
+      .join(", ");
 
-    const notasGenerales = pedidoResult.recordset.length ? pedidoResult.recordset[0].Notas : "";
-
-    // Obtener nombres de productos por sus IDs (optimizado)
-    const productoIds = [...new Set(detallesResult.recordset.map(d => d.ID_Producto))].filter(Boolean);
-
-    let productosMap = {};
-    if (productoIds.length) {
-      const productosQuery = `SELECT ID_Producto, Nombre FROM Producto WHERE ID_Producto IN (${productoIds.join(",")})`;
-      const productosResult = await pool.request().query(productosQuery);
-      productosMap = productosResult.recordset.reduce((acc, p) => {
-        acc[p.ID_Producto] = p.Nombre;
-        return acc;
-      }, {});
-    }
-
-    // Construir textos: "NombreProducto (nota) x cantidad"
-    const textosDetalles = detallesResult.recordset.map(d => {
-      const nombreProducto = productosMap[d.ID_Producto] || `Producto#${d.ID_Producto}`;
-      const nota = d.notas_producto ? ` (${d.notas_producto})` : "";
-      const cantidad = d.Cantidad ?? 0;
-      return `${nombreProducto}${nota} x ${cantidad}`;
-    });
-
-    const respuestaTexto = textosDetalles.join(", ") + (notasGenerales ? `\nNotas generales: ${notasGenerales}` : "");
-
-    return res.status(200).json({ detalle: respuestaTexto });
+    return res.status(200).json({ detalle: detallesTexto });
   } catch (err) {
     console.error("getDetallesConNotas error:", err);
     return res.status(500).json({ error: "Error al obtener los detalles del pedido" });
   }
 };
 
+
 // Actualizar pedido y detalles (transaccional, parcial)
-// Recalcula subtotales de detalles si se modifican ID_Producto, ID_Tamano o Cantidad
+// Recalcula subtotales de detalles si se modifican ID_Producto_T, Cantidad
 exports.updatePedidoConDetalle = async (req, res) => {
   const { id } = req.params; // ID_Pedido
   const {
@@ -275,7 +253,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
     Estado_P,
     Monto_Descuento,
     Notas,
-    detalles // array de { ID_Pedido_D, ID_Producto, ID_Tamano, Cantidad }
+    detalles // array de { ID_Pedido_D, ID_Producto,  Cantidad }
   } = req.body;
 
   try {
@@ -323,7 +301,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
       // Si se actualizan detalles, recalculamos sus subtotales en servidor
       if (detalles && Array.isArray(detalles)) {
         for (const det of detalles) {
-          const { ID_Pedido_D, ID_Producto, ID_Tamano, Cantidad } = det;
+        const { ID_Pedido_D, ID_Producto_T, Cantidad } = det;
           if (!ID_Pedido_D) {
             await transaction.rollback();
             return res.status(400).json({ error: "Falta ID_Pedido_D en detalles" });
@@ -337,14 +315,9 @@ exports.updatePedidoConDetalle = async (req, res) => {
           // Si cambian producto/tamano/cantidad recalculemos PrecioTotal
           let recalcularPrecio = false;
           let precioUnitario = null;
-          if (ID_Producto !== undefined) {
-            fieldsDetalle.push("ID_Producto = @ID_Producto");
-            reqDet.input("ID_Producto", sql.Int, ID_Producto);
-            recalcularPrecio = true;
-          }
-          if (ID_Tamano !== undefined) {
-            fieldsDetalle.push("ID_Tamano = @ID_Tamano");
-            reqDet.input("ID_Tamano", sql.Int, ID_Tamano);
+          if (ID_Producto_T !== undefined) {
+            fieldsDetalle.push("ID_Producto_T = @ID_Producto_T");
+            reqDet.input("ID_Producto_T", sql.Int, ID_Producto_T);
             recalcularPrecio = true;
           }
           if (Cantidad !== undefined) {
@@ -357,8 +330,9 @@ exports.updatePedidoConDetalle = async (req, res) => {
             // Para recalcular necesitamos los valores finales: si un campo no fue enviado, obtener su valor actual en BD
             // Obtener estado actual del detalle
             const curDetRes = await new sql.Request(transaction)
-              .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
-              .query("SELECT ID_Producto, ID_Tamano, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
+            .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
+            .query("SELECT ID_Producto_T, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
+
 
             if (!curDetRes.recordset.length) {
               await transaction.rollback();
@@ -366,13 +340,12 @@ exports.updatePedidoConDetalle = async (req, res) => {
             }
 
             const cur = curDetRes.recordset[0];
-            const finalProducto = (ID_Producto !== undefined) ? ID_Producto : cur.ID_Producto;
-            const finalTamano = (ID_Tamano !== undefined) ? ID_Tamano : cur.ID_Tamano;
+            const finalProducto = (ID_Producto_T !== undefined) ? ID_Producto_T : cur.ID_Producto_T;
             const finalCantidad = (Cantidad !== undefined) ? Cantidad : cur.Cantidad;
 
             // calcular precio unitario con helper
             try {
-              precioUnitario = await calcularPrecioUnitario(transaction, finalProducto, finalTamano || null);
+            precioUnitario = await calcularPrecioUnitario(transaction, finalProducto);
             } catch (err) {
               await transaction.rollback();
               return res.status(400).json({ error: err.message });
@@ -444,14 +417,18 @@ exports.getPedidoDetalles = async (req, res) => {
       .input("ID_Pedido", sql.Int, id)
       .query(`
         SELECT 
-          d.ID_Pedido_D, d.ID_Producto, d.Cantidad, d.PrecioTotal,
+          d.ID_Pedido_D, 
+          d.ID_Producto_T, 
+          d.Cantidad, 
+          d.PrecioTotal,
           p.Nombre AS nombre_producto,
-          cp.Nombre AS nombre_categoria,
-          t.Tamano AS nombre_tamano
+          t.Tamano AS nombre_tamano,
+          cp.Nombre AS nombre_categoria
         FROM Pedido_Detalle d
-        INNER JOIN Producto p ON d.ID_Producto = p.ID_Producto
+        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
-        LEFT JOIN Tamano t ON d.ID_Tamano = t.ID_Tamano
         WHERE d.ID_Pedido = @ID_Pedido
       `);
 
@@ -485,17 +462,17 @@ exports.getPedidoById = async (req, res) => {
     const detallesRes = await pool.request()
       .input("ID_Pedido", sql.Int, id)
       .query(`
-        SELECT 
-          d.ID_Pedido_D, d.ID_Pedido, d.ID_Producto, d.ID_Tamano, d.Cantidad, d.PrecioTotal,
+        SELECT
+          d.ID_Pedido_D, d.ID_Pedido, d.ID_Producto_T, d.Cantidad, d.PrecioTotal,
           p.Nombre AS nombre_producto,
-          cp.Nombre AS nombre_categoria,
           t.Tamano AS nombre_tamano
         FROM Pedido_Detalle d
-        INNER JOIN Producto p ON d.ID_Producto = p.ID_Producto
-        LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
-        LEFT JOIN Tamano t ON d.ID_Tamano = t.ID_Tamano
+        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         WHERE d.ID_Pedido = @ID_Pedido
       `);
+
 
     return res.status(200).json({
       ...pedido,
@@ -504,5 +481,75 @@ exports.getPedidoById = async (req, res) => {
   } catch (err) {
     console.error("❌ getPedidoById error:", err.message);
     return res.status(500).json({ error: "Error al obtener el pedido" });
+  }
+};
+
+
+// =============================
+// 🔹 ACTUALIZAR ESTADO DEL PEDIDO
+// =============================
+exports.statusPedido = async (req, res) => {
+  const { id } = req.params; // ID_Pedido
+  const { Estado_P } = req.body;
+
+  try {
+    // Validar que el estado sea válido (solo 2 estados permitidos para cambios)
+    const estadosValidos = ['E', 'C']; // Solo permitir cambiar a Entregado o Cancelado
+    if (!Estado_P || !estadosValidos.includes(Estado_P)) {
+      return res.status(400).json({ 
+        error: "Estado inválido", 
+        estados_permitidos: estadosValidos,
+        descripcion: {
+          'E': 'Entregado',
+          'C': 'Cancelado'
+        }
+      });
+    }
+
+    const pool = await getConnection();
+    
+    // Verificar que el pedido existe
+    const pedidoCheck = await pool.request()
+      .input("ID_Pedido", sql.Int, id)
+      .query("SELECT ID_Pedido, Estado_P FROM Pedido WHERE ID_Pedido = @ID_Pedido");
+
+    if (!pedidoCheck.recordset.length) {
+      return res.status(404).json({ error: "Pedido no encontrado" });
+    }
+
+    const pedidoActual = pedidoCheck.recordset[0];
+
+    // Solo permitir cambiar estado de pedidos pendientes
+    if (pedidoActual.Estado_P !== 'P') {
+      return res.status(400).json({ 
+        error: "Solo se puede modificar un pedido pendiente",
+        estado_actual: pedidoActual.Estado_P
+      });
+    }
+
+    // Actualizar el estado del pedido
+    const result = await pool.request()
+      .input("Estado_P", sql.Char(1), Estado_P)
+      .input("ID_Pedido", sql.Int, id)
+      .query("UPDATE Pedido SET Estado_P = @Estado_P WHERE ID_Pedido = @ID_Pedido");
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(500).json({ error: "No se pudo actualizar el estado del pedido" });
+    }
+
+    return res.status(200).json({
+      message: "Estado del pedido actualizado correctamente",
+      ID_Pedido: parseInt(id),
+      estado_anterior: pedidoActual.Estado_P,
+      estado_nuevo: Estado_P,
+      descripcion_estado: {
+        'E': 'Entregado',
+        'C': 'Cancelado'
+      }[Estado_P]
+    });
+
+  } catch (err) {
+    console.error("❌ statusPedido error:", err.message);
+    return res.status(500).json({ error: "Error al actualizar el estado del pedido" });
   }
 };
