@@ -127,13 +127,26 @@ exports.updateTamano = async (req, res) => {
 };
 
 // ==============================
-// 📕 Eliminar un tamaño
+// 📕 Eliminar un tamaño (Versión Mejorada)
 // ==============================
 exports.deleteTamano = async (req, res) => {
   const { id } = req.params;
 
   try {
     const pool = await getConnection();
+
+    // Verificar si hay productos asociados en Producto_Tamano
+    const productosResult = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT COUNT(*) as count FROM Producto_Tamano WHERE ID_Tamano = @id");
+    
+    if (productosResult.recordset[0].count > 0) {
+      return res.status(400).json({ 
+        error: "No se puede eliminar el tamaño porque tiene productos asociados. Elimine o reassigne los productos primero." 
+      });
+    }
+
+    // Si no hay productos asociados, proceder con la eliminación
     const result = await pool.request()
       .input("id", sql.Int, id)
       .query("DELETE FROM Tamano WHERE ID_Tamano = @id");
@@ -145,6 +158,14 @@ exports.deleteTamano = async (req, res) => {
     return res.status(200).json({ message: "Tamaño eliminado correctamente" });
   } catch (err) {
     console.error("deleteTamano error:", err);
+    
+    // Manejar otros errores de base de datos
+    if (err.number === 547) {
+      return res.status(400).json({ 
+        error: "No se puede eliminar el tamaño porque está siendo utilizado por productos en el sistema." 
+      });
+    }
+    
     return res.status(500).json({ error: "Error al eliminar el tamaño" });
   }
 };

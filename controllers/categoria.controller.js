@@ -129,13 +129,41 @@ exports.updateCategoria = async (req, res) => {
 };
 
 // =========================================
-// 📕 Eliminar una categoría
+// 📕 Eliminar una categoría (Versión Mejorada)
 // =========================================
 exports.deleteCategoria = async (req, res) => {
   const { tipo, id } = req.params;
   try {
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
+
+    // Si es categoría de producto, verificar si hay productos asociados
+    if (tipo.toLowerCase() === "producto") {
+      const productosResult = await pool.request()
+        .input("id", sql.Int, id)
+        .query("SELECT COUNT(*) as count FROM Producto WHERE ID_Categoria_P = @id");
+      
+      if (productosResult.recordset[0].count > 0) {
+        return res.status(400).json({ 
+          error: "No se puede eliminar la categoría porque tiene productos asociados. Elimine o reassigne los productos primero." 
+        });
+      }
+    }
+
+    // Si es categoría de insumos, verificar si hay insumos asociados
+    if (tipo.toLowerCase() === "insumo") {
+      const insumosResult = await pool.request()
+        .input("id", sql.Int, id)
+        .query("SELECT COUNT(*) as count FROM Insumos WHERE ID_Categoria_I = @id");
+      
+      if (insumosResult.recordset[0].count > 0) {
+        return res.status(400).json({ 
+          error: "No se puede eliminar la categoría porque tiene insumos asociados. Elimine o reassigne los insumos primero." 
+        });
+      }
+    }
+
+    // Si no hay registros asociados, proceder con la eliminación
     await pool.request()
       .input("id", sql.Int, id)
       .query(`DELETE FROM ${config.table} WHERE ${config.id} = @id`);
