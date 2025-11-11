@@ -2,7 +2,7 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
-// 🔹 Mapper simple (respetando bd.models.js)
+// 🔹 Mapper actualizado con nuevos campos
 // ==============================
 function mapToVenta(row = {}) {
   const template = bdModel?.Venta || {
@@ -13,6 +13,8 @@ function mapToVenta(row = {}) {
     Lugar_Emision: "",
     IGV: 0.0,
     Total: 0.0,
+    Monto_Recibido: 0.0,
+    Vuelto: 0.0,
     Fecha_Registro: ""
   };
   return {
@@ -24,6 +26,8 @@ function mapToVenta(row = {}) {
     Lugar_Emision: row.Lugar_Emision ?? template.Lugar_Emision,
     IGV: row.IGV ?? template.IGV,
     Total: row.Total ?? template.Total,
+    Monto_Recibido: row.Monto_Recibido ?? template.Monto_Recibido,
+    Vuelto: row.Vuelto ?? template.Vuelto,
     Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro
   };
 }
@@ -90,8 +94,9 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar 
 
   return { pedidoSubTotal, descuentoMonto, subtotalConCupon, igvMonto, totalFinal, cuponAplicado };
 }
+
 // ==============================
-// 🔹 Listar ventas enriquecido - CORREGIDO
+// 🔹 Listar ventas enriquecido - ACTUALIZADO con nuevos campos
 // ==============================
 exports.getVentas = async (_req, res) => {
   try {
@@ -108,6 +113,8 @@ exports.getVentas = async (_req, res) => {
         v.Lugar_Emision,
         v.IGV,
         v.Total,
+        v.Monto_Recibido,
+        v.Vuelto,
         STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
@@ -118,7 +125,8 @@ exports.getVentas = async (_req, res) => {
       LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
       GROUP BY 
         v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
-        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total
+        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
+        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
       ORDER BY v.ID_Venta DESC
     `;
 
@@ -135,6 +143,8 @@ exports.getVentas = async (_req, res) => {
       Lugar_Emision: r.Lugar_Emision,
       IGV: r.IGV,
       Total: r.Total,
+      Monto_Recibido: r.Monto_Recibido,
+      Vuelto: r.Vuelto,
       Detalles_Pedido: r.Detalles_Pedido || ""
     }));
 
@@ -166,10 +176,10 @@ exports.getVentaById = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Crear venta (sin IGV)
+// 🔹 Crear venta (sin IGV) - ACTUALIZADO con nuevos campos
 // ==============================
 exports.createVenta = async (req, res) => {
-  const { ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision } = req.body; // Quitar IGV_Porcentaje
+  const { ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, Monto_Recibido } = req.body;
   if (!ID_Pedido || !Tipo_Venta || !Metodo_Pago) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
@@ -181,9 +191,13 @@ exports.createVenta = async (req, res) => {
     await transaction.begin();
 
     // Calcular montos (IGV será 0 automáticamente)
-    const montos = await calcularMontos(transaction, ID_Pedido); // Sin pasar IGV_Porcentaje
+    const montos = await calcularMontos(transaction, ID_Pedido);
 
-    // Insertar venta
+    // Calcular vuelto si se proporcionó Monto_Recibido
+    const montoRecibidoNum = Monto_Recibido ? Number(Monto_Recibido) : 0;
+    const vuelto = montoRecibidoNum > 0 ? Math.max(0, montoRecibidoNum - montos.totalFinal) : 0;
+
+    // Insertar venta con nuevos campos
     const insertRes = await new sql.Request(transaction)
       .input("ID_Pedido", sql.Int, ID_Pedido)
       .input("Tipo_Venta", sql.VarChar(1), Tipo_Venta)
@@ -191,10 +205,12 @@ exports.createVenta = async (req, res) => {
       .input("Lugar_Emision", sql.Char(1), Lugar_Emision || "B")
       .input("IGV", sql.Decimal(10,2), montos.igvMonto) // Esto será 0
       .input("Total", sql.Decimal(10,2), montos.totalFinal) // Esto será igual al subtotal con cupón
+      .input("Monto_Recibido", sql.Decimal(10,2), montoRecibidoNum)
+      .input("Vuelto", sql.Decimal(10,2), vuelto)
       .query(`
-        INSERT INTO Ventas (ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, IGV, Total)
+        INSERT INTO Ventas (ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, IGV, Total, Monto_Recibido, Vuelto)
         OUTPUT INSERTED.ID_Venta
-        VALUES (@ID_Pedido, @Tipo_Venta, @Metodo_Pago, @Lugar_Emision, @IGV, @Total)
+        VALUES (@ID_Pedido, @Tipo_Venta, @Metodo_Pago, @Lugar_Emision, @IGV, @Total, @Monto_Recibido, @Vuelto)
       `);
 
     const nuevoID_Venta = insertRes.recordset[0].ID_Venta;
@@ -218,6 +234,8 @@ exports.createVenta = async (req, res) => {
       SubTotal_Con_Cupon: montos.subtotalConCupon,
       IGV: montos.igvMonto, // Esto será 0
       Total: montos.totalFinal, // Esto será igual al subtotal con cupón
+      Monto_Recibido: montoRecibidoNum,
+      Vuelto: vuelto,
       Cupon_Aplicado: montos.cuponAplicado ? {
         ID_Cupon: montos.cuponAplicado.ID_Cupon,
         Tipo_Desc: montos.cuponAplicado.Tipo_Desc,
@@ -233,7 +251,43 @@ exports.createVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Datos de boleta/factura - CORREGIDO (sin IGV)
+// 🔹 Actualizar venta (para montos recibidos y vuelto)
+// ==============================
+exports.updateVenta = async (req, res) => {
+  const { id } = req.params;
+  const { Monto_Recibido, Vuelto } = req.body;
+
+  try {
+    const pool = await getConnection();
+    
+    const result = await pool.request()
+      .input("ID_Venta", sql.Int, id)
+      .input("Monto_Recibido", sql.Decimal(10,2), Monto_Recibido || 0)
+      .input("Vuelto", sql.Decimal(10,2), Vuelto || 0)
+      .query(`
+        UPDATE Ventas 
+        SET Monto_Recibido = @Monto_Recibido, Vuelto = @Vuelto
+        WHERE ID_Venta = @ID_Venta
+      `);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Venta no encontrada" });
+    }
+
+    res.status(200).json({ 
+      message: "Venta actualizada correctamente",
+      Monto_Recibido: Monto_Recibido || 0,
+      Vuelto: Vuelto || 0
+    });
+
+  } catch (err) {
+    console.error("updateVenta error:", err);
+    res.status(500).json({ error: "Error al actualizar la venta" });
+  }
+};
+
+// ==============================
+// 🔹 Datos de boleta/factura - ACTUALIZADO con nuevos campos
 // ==============================
 exports.datosBoletaVenta = async (req, res) => {
   try {
@@ -281,6 +335,8 @@ exports.datosBoletaVenta = async (req, res) => {
         Tipo_Venta: venta.Tipo_Venta,
         Metodo_Pago: venta.Metodo_Pago,
         Lugar_Emision: venta.Lugar_Emision,
+        Monto_Recibido: venta.Monto_Recibido,
+        Vuelto: venta.Vuelto,
         Fecha_Registro: venta.Fecha_Registro
       },
       pedido: {
@@ -313,7 +369,7 @@ exports.datosBoletaVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Detalles de Venta - CORREGIDO
+// 🔹 Detalles de Venta - ACTUALIZADO con nuevos campos
 // ==============================
 exports.detallesVenta = async (req, res) => {
   try {
@@ -324,7 +380,8 @@ exports.detallesVenta = async (req, res) => {
 
     const sqlQuery = `
       SELECT
-          v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Metodo_Pago, v.Lugar_Emision, v.IGV, v.Total, v.Fecha_Registro,
+          v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Metodo_Pago, v.Lugar_Emision, 
+          v.IGV, v.Total, v.Monto_Recibido, v.Vuelto, v.Fecha_Registro,
           p.ID_Cliente, p.ID_Usuario, p.SubTotal, p.Notas,
           
           pd.ID_Pedido_D, pd.ID_Producto_T, pd.Cantidad, pd.PrecioTotal,
@@ -377,6 +434,8 @@ exports.detallesVenta = async (req, res) => {
       Lugar_Emision: firstRow.Lugar_Emision,
       IGV: firstRow.IGV,
       Total: firstRow.Total,
+      Monto_Recibido: firstRow.Monto_Recibido,
+      Vuelto: firstRow.Vuelto,
       Fecha_Registro: firstRow.Fecha_Registro,
       Notas_Pedido: firstRow.Notas || ""
     };

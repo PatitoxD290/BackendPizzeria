@@ -219,6 +219,8 @@ const Venta = {
   Lugar_Emision: "B", // A=Tupac, B=Yarina
   IGV: 0.0,
   Total: 0.0,
+  Monto_Recibido: 0.0,
+  Vuelto: 0.0,
   Fecha_Registro: ""
 };
 
