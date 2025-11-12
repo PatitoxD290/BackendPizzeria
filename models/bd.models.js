@@ -177,13 +177,14 @@ const Usuario = {
 const Pedido = {
   ID_Pedido: 0,
   ID_Cliente: 0,
-  ID_Usuario: 0,
+  ID_Usuario: null, // Puede ser null según la BD
   Notas: "",
   SubTotal: 0.0,
-  Estado_P: "P", // P=Pendiente, C=Cancelado, E=Entregado, D=En preparación
+  Estado_P: "P", //  P=Pendiente, C=Cancelado, E=Entregado
   Fecha_Registro: "",
   Hora_Pedido: ""
 };
+
 
 // ===============================
 // 16. PEDIDO DETALLE (Actualizado)

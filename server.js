@@ -28,6 +28,9 @@ const combosRoutes = require("./routes/combos.routes");
 const deliveryRoutes = require("./routes/delivery.routes");
 const tamanoRoutes = require("./routes/tamano.routes");
 
+const { asegurarClienteVarios } = require("./controllers/cliente.controller");
+
+
 // IMPORT: conexión MSSQL
 const { getConnection } = require("./config/Connection");
 
@@ -121,6 +124,10 @@ process.on("unhandledRejection", (reason) => {
     await getConnection();
     console.log(`[SERVER] Conexión a la base de datos establecida ✅`);
     app.locals.dbConnected = true;
+    
+    // 🔧 INICIALIZAR CLIENTE VARIOS CON ID 1
+    await asegurarClienteVarios();
+    
   } catch (err) {
     console.error(`[SERVER] No se pudo conectar a la base de datos ❌`);
     console.error(err && err.message ? err.message : err);

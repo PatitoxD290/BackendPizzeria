@@ -18,7 +18,7 @@ function mapToPedido(row = {}) {
     ...template,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
-    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario,
+    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario, // Mantener null si no viene
     Hora_Pedido: row.Hora_Pedido ?? template.Hora_Pedido,
     Estado_P: row.Estado_P ?? template.Estado_P,
     SubTotal: row.SubTotal ?? template.SubTotal,
@@ -47,7 +47,6 @@ function mapToDetallePedido(row = {}) {
   };
 }
 
-
 // ---------------------------------
 // Helper: obtener precio unitario (precio_base + variacion)
 // ---------------------------------
@@ -69,9 +68,7 @@ async function calcularPrecioUnitario(transaction, ID_Producto_T) {
   return Number(result.recordset[0].Precio);
 }
 
-
 // Crear pedido con detalle (transaccional)
-// ahora recalculamos todos los subtotales en servidor
 exports.createPedidoConDetalle = async (req, res) => {
   const {
     ID_Cliente,
@@ -88,14 +85,46 @@ exports.createPedidoConDetalle = async (req, res) => {
       return res.status(400).json({ error: "Debe enviar al menos un detalle de pedido" });
     }
 
-    // Cliente por defecto = 1
-    const clienteIdFinal = ID_Cliente && ID_Cliente !== "" ? ID_Cliente : 1;
+    // Determinar el cliente a usar
+    let clienteIdFinal;
+    if (ID_Cliente && ID_Cliente !== "") {
+      clienteIdFinal = ID_Cliente;
+    } else {
+      // Buscar el ID del cliente "Clientes Varios"
+      const poolCheck = await getConnection();
+      const clienteVarios = await poolCheck.request()
+        .input("Nombre", sql.VarChar(100), "Clientes Varios")
+        .query("SELECT ID_Cliente FROM Cliente WHERE Nombre = @Nombre");
+      
+      if (clienteVarios.recordset.length > 0) {
+        clienteIdFinal = clienteVarios.recordset[0].ID_Cliente;
+      } else {
+        // Fallback a ID 1 si no se encuentra
+        clienteIdFinal = 1;
+      }
+    }
+
+    const usuarioIdFinal = ID_Usuario && ID_Usuario !== "" ? ID_Usuario : null;
 
     const pool = await getConnection();
     const transaction = new sql.Transaction(pool);
-    await transaction.begin();
-
+    
     try {
+      await transaction.begin();
+
+      // VERIFICAR SI EL CLIENTE EXISTE
+      const checkClienteReq = new sql.Request(transaction);
+      const clienteExists = await checkClienteReq
+        .input("ID_Cliente", sql.Int, clienteIdFinal)
+        .query("SELECT ID_Cliente, Nombre FROM Cliente WHERE ID_Cliente = @ID_Cliente");
+
+      if (!clienteExists.recordset.length) {
+        await transaction.rollback();
+        return res.status(400).json({ 
+          error: `El cliente con ID ${clienteIdFinal} no existe` 
+        });
+      }
+
       // 1) Insertar pedido (solo los campos del modelo)
       const requestPedido = new sql.Request(transaction);
       const insertPedidoQuery = `
@@ -110,8 +139,8 @@ exports.createPedidoConDetalle = async (req, res) => {
       `;
 
       const resultInsertPedido = await requestPedido
-        .input("ID_Cliente", sql.Int, clienteIdFinal)
-        .input("ID_Usuario", sql.Int, ID_Usuario || null)
+        .input("ID_Cliente", sql.Int, clienteIdFinal) // Usar el ID del cliente que viene del frontend
+        .input("ID_Usuario", sql.Int, usuarioIdFinal)
         .input("Hora_Pedido", sql.VarChar(20), Hora_Pedido || new Date().toLocaleTimeString())
         .input("Estado_P", sql.Char(1), Estado_P || "P")
         .input("SubTotal", sql.Decimal(10, 2), 0.0)
@@ -131,13 +160,12 @@ exports.createPedidoConDetalle = async (req, res) => {
       for (const d of detalles) {
         const { ID_Producto_T, Cantidad } = d;
 
-       if (!ID_Producto_T || Cantidad == null) {
-        await transaction.rollback();
-        return res.status(400).json({
-          error: "Faltan campos obligatorios en detalle: ID_Producto_T o Cantidad"
-        });
-      }
-
+        if (!ID_Producto_T || Cantidad == null) {
+          await transaction.rollback();
+          return res.status(400).json({
+            error: "Faltan campos obligatorios en detalle: ID_Producto_T o Cantidad"
+          });
+        }
 
         // calcular precio unitario
         let precioUnitario;
@@ -176,13 +204,28 @@ exports.createPedidoConDetalle = async (req, res) => {
         .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`);
 
       await transaction.commit();
+      
+      // Obtener información del cliente para la respuesta
+      const clienteInfo = clienteExists.recordset[0];
+      
       return res.status(201).json({
         message: "Pedido y detalles registrados correctamente",
         ID_Pedido: pedido_id,
+        ID_Cliente: clienteIdFinal,
+        Cliente: clienteInfo.Nombre, // Incluir nombre del cliente en la respuesta
         SubTotal: subTotalAcumulado
       });
+      
     } catch (err) {
-      await transaction.rollback();
+      // Solo hacer rollback si la transacción comenzó
+      try {
+        if (transaction._aborted === false) {
+          await transaction.rollback();
+        }
+      } catch (rollbackErr) {
+        console.error("Error durante rollback:", rollbackErr.message);
+      }
+      
       console.error("createPedidoConDetalle transaction error:", err);
       return res.status(500).json({ error: "Error al registrar el pedido con detalles" });
     }
@@ -191,7 +234,6 @@ exports.createPedidoConDetalle = async (req, res) => {
     return res.status(500).json({ error: "Error al registrar el pedido" });
   }
 };
-
 
 // Listar pedidos FIFO (por Fecha_Registro ASC, Hora_Pedido ASC)
 exports.getPedidos = async (_req, res) => {
@@ -242,9 +284,7 @@ exports.getDetallesConNotas = async (req, res) => {
   }
 };
 
-
 // Actualizar pedido y detalles (transaccional, parcial)
-// Recalcula subtotales de detalles si se modifican ID_Producto_T, Cantidad
 exports.updatePedidoConDetalle = async (req, res) => {
   const { id } = req.params; // ID_Pedido
   const {
@@ -253,7 +293,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
     Estado_P,
     Monto_Descuento,
     Notas,
-    detalles // array de { ID_Pedido_D, ID_Producto,  Cantidad }
+    detalles // array de { ID_Pedido_D, ID_Producto_T, Cantidad }
   } = req.body;
 
   try {
@@ -273,7 +313,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
       }
       if (ID_Usuario !== undefined) {
         updateFields.push("ID_Usuario = @ID_Usuario");
-        reqPedido.input("ID_Usuario", sql.Int, ID_Usuario);
+        reqPedido.input("ID_Usuario", sql.Int, ID_Usuario || null); // Permitir null
       }
       if (Estado_P !== undefined) {
         updateFields.push("Estado_P = @Estado_P");
@@ -283,7 +323,6 @@ exports.updatePedidoConDetalle = async (req, res) => {
         updateFields.push("Notas = @Notas");
         reqPedido.input("Notas", sql.VarChar(255), Notas);
       }
-      // Si viene Monto_Descuento lo actualizamos en la columna correspondiente también
       if (Monto_Descuento !== undefined) {
         updateFields.push("Monto_Descuento = @Monto_Descuento");
         reqPedido.input("Monto_Descuento", sql.Decimal(10, 2), Monto_Descuento);
@@ -301,7 +340,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
       // Si se actualizan detalles, recalculamos sus subtotales en servidor
       if (detalles && Array.isArray(detalles)) {
         for (const det of detalles) {
-        const { ID_Pedido_D, ID_Producto_T, Cantidad } = det;
+          const { ID_Pedido_D, ID_Producto_T, Cantidad } = det;
           if (!ID_Pedido_D) {
             await transaction.rollback();
             return res.status(400).json({ error: "Falta ID_Pedido_D en detalles" });
@@ -312,7 +351,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
           const reqDet = new sql.Request(transaction);
           reqDet.input("ID_Pedido_D", sql.Int, ID_Pedido_D);
 
-          // Si cambian producto/tamano/cantidad recalculemos PrecioTotal
+          // Si cambian producto/tamaño/cantidad recalculemos PrecioTotal
           let recalcularPrecio = false;
           let precioUnitario = null;
           if (ID_Producto_T !== undefined) {
@@ -327,12 +366,10 @@ exports.updatePedidoConDetalle = async (req, res) => {
           }
 
           if (recalcularPrecio) {
-            // Para recalcular necesitamos los valores finales: si un campo no fue enviado, obtener su valor actual en BD
             // Obtener estado actual del detalle
             const curDetRes = await new sql.Request(transaction)
-            .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
-            .query("SELECT ID_Producto_T, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
-
+              .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
+              .query("SELECT ID_Producto_T, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
 
             if (!curDetRes.recordset.length) {
               await transaction.rollback();
@@ -345,7 +382,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
 
             // calcular precio unitario con helper
             try {
-            precioUnitario = await calcularPrecioUnitario(transaction, finalProducto);
+              precioUnitario = await calcularPrecioUnitario(transaction, finalProducto);
             } catch (err) {
               await transaction.rollback();
               return res.status(400).json({ error: err.message });
@@ -374,6 +411,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
         .query("SELECT ISNULL(SUM(PrecioTotal),0) AS SubTotalCalc FROM Pedido_Detalle WHERE ID_Pedido = @ID_Pedido_SUM");
 
       const nuevoSubTotal = Number(sumRes.recordset[0].SubTotalCalc ?? 0);
+      
       // Obtener Monto_Descuento actual (si no se envió en body)
       let descuento = Monto_Descuento;
       if (descuento === undefined) {
@@ -393,7 +431,11 @@ exports.updatePedidoConDetalle = async (req, res) => {
         .query("UPDATE Pedido SET SubTotal = @SubTotal, Total = @Total WHERE ID_Pedido = @ID_Pedido");
 
       await transaction.commit();
-      return res.status(200).json({ message: "Pedido y detalles actualizados correctamente", SubTotal: nuevoSubTotal, Total: nuevoTotal });
+      return res.status(200).json({ 
+        message: "Pedido y detalles actualizados correctamente", 
+        SubTotal: nuevoSubTotal, 
+        Total: nuevoTotal 
+      });
     } catch (err) {
       await transaction.rollback();
       console.error("updatePedidoConDetalle transaction error:", err);
@@ -405,9 +447,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
   }
 };
 
-// =============================
-// 🔹 Obtener solo los detalles
-// =============================
+// Obtener solo los detalles
 exports.getPedidoDetalles = async (req, res) => {
   const { id } = req.params;
   try {
@@ -442,9 +482,7 @@ exports.getPedidoDetalles = async (req, res) => {
   }
 };
 
-// =============================
-// 🔹 Obtener Pedido por ID + Detalles
-// =============================
+// Obtener Pedido por ID + Detalles
 exports.getPedidoById = async (req, res) => {
   const { id } = req.params;
   try {
@@ -473,7 +511,6 @@ exports.getPedidoById = async (req, res) => {
         WHERE d.ID_Pedido = @ID_Pedido
       `);
 
-
     return res.status(200).json({
       ...pedido,
       detalles: detallesRes.recordset || []
@@ -484,16 +521,13 @@ exports.getPedidoById = async (req, res) => {
   }
 };
 
-
-// =============================
-// 🔹 ACTUALIZAR ESTADO DEL PEDIDO
-// =============================
+// Actualizar estado del pedido
 exports.statusPedido = async (req, res) => {
   const { id } = req.params; // ID_Pedido
   const { Estado_P } = req.body;
 
   try {
-    // Validar que el estado sea válido (solo 2 estados permitidos para cambios)
+    // Validar que el estado sea válido
     const estadosValidos = ['E', 'C']; // Solo permitir cambiar a Entregado o Cancelado
     if (!Estado_P || !estadosValidos.includes(Estado_P)) {
       return res.status(400).json({ 

@@ -3,6 +3,46 @@ const bdModel = require("../models/bd.models");
 const axios = require("axios");
 
 // ==============================
+// 🔧 FUNCIÓN: Asegurar que Clientes Varios tenga ID 1
+// ==============================
+async function asegurarClienteVarios() {
+  try {
+    const pool = await getConnection();
+    
+    // Verificar si ya existe un cliente llamado "Clientes Varios"
+    const checkCliente = await pool.request()
+      .input("Nombre", sql.VarChar(100), "Clientes Varios")
+      .query("SELECT ID_Cliente, Nombre FROM Cliente WHERE Nombre = @Nombre");
+
+    if (checkCliente.recordset.length > 0) {
+      console.log(`✅ Cliente 'Clientes Varios' ya existe con ID: ${checkCliente.recordset[0].ID_Cliente}`);
+      return checkCliente.recordset[0].ID_Cliente;
+    }
+
+    // Si no existe, crear el cliente (sin forzar ID)
+    const result = await pool.request()
+      .input("Nombre", sql.VarChar(100), "Clientes Varios")
+      .input("DNI", sql.VarChar(20), "")
+      .input("Apellido", sql.VarChar(100), "")
+      .input("Telefono", sql.VarChar(20), "")
+      .input("Fecha_Registro", sql.DateTime, new Date())
+      .query(`
+        INSERT INTO Cliente (DNI, Nombre, Apellido, Telefono, Fecha_Registro)
+        VALUES (@DNI, @Nombre, @Apellido, @Telefono, @Fecha_Registro);
+        SELECT SCOPE_IDENTITY() AS ID_Cliente;
+      `);
+    
+    const clienteId = result.recordset[0].ID_Cliente;
+    console.log(`✅ Cliente 'Clientes Varios' creado con ID: ${clienteId}`);
+    return clienteId;
+    
+  } catch (error) {
+    console.error("❌ Error asegurando cliente varios:", error.message);
+    return 1; // Retornar 1 como fallback
+  }
+}
+
+// ==============================
 // 🔄 Mapper: adapta una fila de BD al modelo Cliente
 // ==============================
 function mapToCliente(row = {}) {
@@ -100,8 +140,6 @@ exports.createCliente = async (req, res) => {
     const clienteCreado = await pool.request().query("SELECT TOP 1 * FROM Cliente ORDER BY ID_Cliente DESC");
     return res.status(201).json(mapToCliente(clienteCreado.recordset[0]));
 
-
-    return res.status(201).json({ message: "Cliente registrado correctamente" });
   } catch (err) {
     console.error("createCliente error:", err);
     return res.status(500).json({ error: "Error al registrar el cliente" });
@@ -116,6 +154,13 @@ exports.updateCliente = async (req, res) => {
   const { Nombre, Apellido, DNI, Telefono } = req.body;
 
   try {
+    // Prevenir la modificación del cliente "Clientes Varios" (ID 1)
+    if (parseInt(id) === 1) {
+      return res.status(400).json({ 
+        error: "No se puede modificar el cliente 'Clientes Varios' (ID 1)" 
+      });
+    }
+
     const pool = await getConnection();
 
     // 📌 Validar que el DNI no se repita (si fue proporcionado)
@@ -188,6 +233,13 @@ exports.deleteCliente = async (req, res) => {
   const { id } = req.params;
 
   try {
+    // Prevenir la eliminación del cliente "Clientes Varios" (ID 1)
+    if (parseInt(id) === 1) {
+      return res.status(400).json({ 
+        error: "No se puede eliminar el cliente 'Clientes Varios' (ID 1)" 
+      });
+    }
+
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
@@ -301,3 +353,6 @@ exports.buscarClientePorDocumento = async (req, res) => {
     return res.status(500).json({ error: "Error al buscar o guardar el cliente" });
   }
 };
+
+// Exportar la función de aseguración
+exports.asegurarClienteVarios = asegurarClienteVarios;
