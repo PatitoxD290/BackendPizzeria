@@ -105,7 +105,7 @@ const ProductoTamano = {
 const Stock = {
   ID_Stock: 0,
   ID_Insumo: 0,
-  ID_Proveedor: 0,
+  ID_Proveedor: null, // Cambiado a null para permitir valores nulos
   Cantidad_Recibida: 0,
   Costo_Unitario: 0.0,
   Costo_Total: 0.0,

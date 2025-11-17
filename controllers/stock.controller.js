@@ -8,7 +8,7 @@ function mapToStock(row = {}) {
   const template = bdModel?.Stock || {
     ID_Stock: 0,
     ID_Insumo: 0,
-    ID_Proveedor: 0,
+    ID_Proveedor: null, // Cambiado a null
     Cantidad_Recibida: 0,
     Costo_Unitario: 0.0,
     Costo_Total: 0.0,
@@ -112,20 +112,27 @@ exports.createStock = async (req, res) => {
   } = req.body;
 
   try {
-    if (!ID_Insumo || !ID_Proveedor || Cantidad_Recibida == null || Costo_Unitario == null) {
+    // Validación modificada: ID_Proveedor ya no es obligatorio
+    if (!ID_Insumo || Cantidad_Recibida == null || Costo_Unitario == null) {
       return res.status(400).json({
-        error: "Faltan campos obligatorios: ID_Insumo, ID_Proveedor, Cantidad_Recibida o Costo_Unitario"
+        error: "Faltan campos obligatorios: ID_Insumo, Cantidad_Recibida o Costo_Unitario"
       });
     }
 
     const pool = await getConnection();
-    const req = pool.request();
+    const request = pool.request();
 
     const costoTotalCalc = Costo_Total != null ? Costo_Total : Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
 
-    await req
+    // Manejar ID_Proveedor null o vacío
+    let proveedorValue = ID_Proveedor;
+    if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
+      proveedorValue = null;
+    }
+
+    await request
       .input("ID_Insumo", sql.Int, ID_Insumo)
-      .input("ID_Proveedor", sql.Int, ID_Proveedor)
+      .input("ID_Proveedor", sql.Int, proveedorValue) // Puede ser null
       .input("Cantidad_Recibida", sql.Int, Cantidad_Recibida)
       .input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario)
       .input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc)
@@ -168,9 +175,15 @@ exports.updateStock = async (req, res) => {
     const pool = await getConnection();
     const request = pool.request();
 
+    // Manejar ID_Proveedor null o vacío
+    let proveedorValue = ID_Proveedor;
+    if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
+      proveedorValue = null;
+    }
+
     request.input("id", sql.Int, id);
     request.input("ID_Insumo", sql.Int, ID_Insumo);
-    request.input("ID_Proveedor", sql.Int, ID_Proveedor);
+    request.input("ID_Proveedor", sql.Int, proveedorValue); // Puede ser null
     request.input("Cantidad_Recibida", sql.Int, Cantidad_Recibida);
     request.input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario);
     request.input("Costo_Total", sql.Decimal(10, 2), Costo_Total);
@@ -304,9 +317,9 @@ exports.createMovimientoStock = async (req, res) => {
         .input("Fecha_Mov", sql.DateTime, new Date())
         .query(`
           INSERT INTO Stock_Movimiento (
-            ID_Stock, Tipo_Mov, Motivo, Cantidad, Stock_ACT, Usuario_ID, Fecha_Mov, Tipo_Mov
+            ID_Stock, Tipo_Mov, Motivo, Cantidad, Stock_ACT, Usuario_ID, Fecha_Mov
           ) VALUES (
-            @ID_Stock, @Tipo_Mov, @Motivo, @Cantidad, @Stock_ACT, @Usuario_ID, @Fecha_Mov, @Tipo_Mov
+            @ID_Stock, @Tipo_Mov, @Motivo, @Cantidad, @Stock_ACT, @Usuario_ID, @Fecha_Mov
           )
         `);
 
@@ -337,31 +350,45 @@ exports.updateMovimientoStock = async (req, res) => {
 
   try {
     const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query(`
-        UPDATE Stock_Movimiento
-        SET -- no borramos, solo marcamos (puedes añadir columna Estado si la quieres)
-          -- Aquí marcamos mov como inactivo si hay columna Estado, si no solo devolvemos OK
-          -- Si tu DDL tiene columna Estado la actualiza; si no, simplemente devolvemos OK
-          -- Intentamos actualizar columna Estado si existe
-          CASE WHEN COL_LENGTH('Stock_Movimiento','Estado') IS NOT NULL THEN
-            UPDATE Stock_Movimiento SET Estado = 'I' WHERE ID_Stock_M = @id
-          END
-      `);
-
-    // Debido a la sentencia CASE/UPDATE anterior, rowsAffected may be unpredictable.
-    // Hacemos una verificación simple: existe el movimiento?
+    
+    // Verificar si existe el movimiento
     const check = await pool.request().input("id", sql.Int, id).query("SELECT ID_Stock_M FROM Stock_Movimiento WHERE ID_Stock_M = @id");
     if (!check.recordset.length) {
       return res.status(404).json({ error: "Movimiento no encontrado" });
     }
 
-    // Si tu tabla tiene Estado, preferiría hacer: UPDATE Stock_Movimiento SET Estado='I' WHERE ID_Stock_M=@id
-    // Para compatibilidad simple, regresamos OK:
-    return res.status(200).json({ message: "Movimiento de stock anulado (si aplica) correctamente" });
+    // Actualizar estado si la columna existe
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`
+        IF COL_LENGTH('Stock_Movimiento','Estado') IS NOT NULL
+          UPDATE Stock_Movimiento SET Estado = 'I' WHERE ID_Stock_M = @id
+        ELSE
+          SELECT 1 as result
+      `);
+
+    return res.status(200).json({ message: "Movimiento de stock anulado correctamente" });
   } catch (err) {
     console.error("updateMovimientoStock error:", err);
     return res.status(500).json({ error: "Error al anular el movimiento de stock" });
+  }
+};
+
+// ==============================
+// 🔧 Función auxiliar: Obtener stock por ID_Insumo
+// ==============================
+exports.getStockByInsumoId = async (req, res) => {
+  const { id } = req.params;
+  try {
+    const pool = await getConnection();
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT * FROM Stock WHERE ID_Insumo = @id AND Estado = 'A'");
+
+    const stocks = (result.recordset || []).map(mapToStock);
+    return res.status(200).json(stocks);
+  } catch (err) {
+    console.error("getStockByInsumoId error:", err);
+    return res.status(500).json({ error: "Error al obtener el stock del insumo" });
   }
 };

@@ -15,4 +15,7 @@ router.get("/stock/movimientos/:id", verifyToken, stockController.getMovimientoS
 router.post("/stock/movimientos", verifyToken, stockController.createMovimientoStock);
 router.put("/stock/movimientos/:id", verifyToken, stockController.updateMovimientoStock);
 
+// Agrega esta línea en stock.routes.js después de las otras rutas de stock
+router.get("/stock/insumo/:id", verifyToken, stockController.getStockByInsumoId);
+
 module.exports = router;
