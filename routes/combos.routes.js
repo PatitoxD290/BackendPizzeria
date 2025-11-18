@@ -10,6 +10,7 @@ router.get("/combos/:id", verifyToken, combosController.getComboById);
 
 router.post("/combos", verifyToken, upload, combosController.createCombo); // Siempre con detalles
 router.put("/combos/:id", verifyToken, upload, combosController.updateCombo); // Siempre con detalles
+router.patch("/combos/:id/status", verifyToken, combosController.statusCombo); // cambiar estado
 router.delete("/combos/:id", verifyToken, combosController.deleteCombo); // Elimina ambos
 
 module.exports = router;

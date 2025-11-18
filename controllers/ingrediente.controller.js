@@ -181,7 +181,7 @@ exports.createInsumo = async (req, res) => {
       .input("ID_Categoria_I", sql.Int, ID_Categoria_I)
       .input("Stock_Min", sql.Int, (Stock_Min ?? 0))
       .input("Stock_Max", sql.Int, 1000) // 🔥 VALOR AUTOMÁTICO 1000
-      .input("Estado", sql.Char(1), (Estado || "D"))
+      .input("Estado", sql.Char(1), "D") // Siempre crear como "Disponible" inicialmente
       .input("Fecha_Registro", sql.DateTime, new Date())
       .query(`
         INSERT INTO Insumos (
@@ -225,7 +225,7 @@ exports.createInsumo = async (req, res) => {
 };
 
 // ==============================
-// 📙 Actualizar un insumo (CON VERIFICACIÓN DE STOCK)
+// 📙 Actualizar un insumo (CON VERIFICACIÓN DE STOCK - VERSIÓN CORREGIDA)
 // ==============================
 exports.updateInsumo = async (req, res) => {
   const { id } = req.params;
@@ -235,9 +235,8 @@ exports.updateInsumo = async (req, res) => {
     Unidad_Med,
     ID_Categoria_I,
     Stock_Min,
-    Stock_Max, // Ahora permitimos actualizar Stock_Max
-    Estado,
-    // Nuevos campos para stock/proveedor
+    Stock_Max,
+    // Estado removido - el backend lo maneja automáticamente
     ID_Proveedor,
     Costo_Unitario,
     Fecha_Vencimiento
@@ -249,6 +248,7 @@ exports.updateInsumo = async (req, res) => {
   try {
     await transaction.begin();
 
+    // 1. Primero actualizar el insumo
     const request = new sql.Request(transaction);
     request.input("id", sql.Int, id);
 
@@ -285,18 +285,14 @@ exports.updateInsumo = async (req, res) => {
       hasUpdates = true;
     }
 
-    // 🔥 Ahora permitimos actualizar Stock_Max
     if (Stock_Max !== undefined) {
       query += " Stock_Max = @Stock_Max,";
       request.input("Stock_Max", sql.Int, Stock_Max);
       hasUpdates = true;
     }
 
-    if (Estado !== undefined) {
-      query += " Estado = @Estado,";
-      request.input("Estado", sql.Char(1), Estado);
-      hasUpdates = true;
-    }
+    // 🔥 ELIMINADO: No permitir actualizar Estado manualmente
+    // El backend lo maneja automáticamente basado en el stock
 
     if (!hasUpdates && !ID_Proveedor && !Costo_Unitario && !Fecha_Vencimiento) {
       await transaction.rollback();
@@ -328,6 +324,36 @@ exports.updateInsumo = async (req, res) => {
       );
     }
 
+    // 3. ACTUALIZAR ESTADO DEL INSUMO BASADO EN EL STOCK ACTUAL
+    // Usar un NUEVO request para evitar conflictos de parámetros
+    const estadoRequest = new sql.Request(transaction);
+    const stockResult = await estadoRequest
+      .input("InsumoID", sql.Int, id)
+      .query(`
+        SELECT 
+          s.Cantidad_Recibida,
+          i.Stock_Min
+        FROM Stock s
+        INNER JOIN Insumos i ON s.ID_Insumo = i.ID_Insumo
+        WHERE s.ID_Insumo = @InsumoID AND s.Estado = 'A'
+      `);
+
+    if (stockResult.recordset.length > 0) {
+      const stock = stockResult.recordset[0];
+      const cantidadRecibida = stock.Cantidad_Recibida || 0;
+      const stockMin = stock.Stock_Min || 0;
+      
+      const nuevoEstado = cantidadRecibida < stockMin ? 'A' : 'D';
+      
+      const updateEstadoRequest = new sql.Request(transaction);
+      await updateEstadoRequest
+        .input("EstadoParam", sql.Char(1), nuevoEstado)
+        .input("InsumoIDUpdate", sql.Int, id)
+        .query("UPDATE Insumos SET Estado = @EstadoParam WHERE ID_Insumo = @InsumoIDUpdate");
+      
+      console.log(`✅ Estado del insumo ${id} actualizado a: ${nuevoEstado}`);
+    }
+
     await transaction.commit();
     return res.status(200).json({ message: "Insumo actualizado correctamente" });
 
@@ -339,7 +365,7 @@ exports.updateInsumo = async (req, res) => {
 };
 
 // ==============================
-// 📕 Eliminar un insumo (CON ELIMINACIÓN DE STOCK RELACIONADO)
+// 📕 Eliminar un insumo (CON ELIMINACIÓN EN ORDEN CORRECTO - VERSIÓN CORREGIDA)
 // ==============================
 exports.deleteInsumo = async (req, res) => {
   const { id } = req.params;
@@ -349,38 +375,89 @@ exports.deleteInsumo = async (req, res) => {
   try {
     await transaction.begin();
 
-    // 1. Primero eliminamos o desactivamos el stock relacionado
-    const deleteStockResult = await new sql.Request(transaction)
+    console.log(`🔍 Intentando eliminar insumo ID: ${id}`);
+
+    // 1. PRIMERO: Verificar que el insumo existe
+    const checkInsumo = await new sql.Request(transaction)
+      .input("id", sql.Int, id)
+      .query("SELECT ID_Insumo FROM Insumos WHERE ID_Insumo = @id");
+
+    if (checkInsumo.recordset.length === 0) {
+      await transaction.rollback();
+      return res.status(404).json({ error: "Insumo no encontrado" });
+    }
+
+    // 2. SEGUNDO: Eliminar primero los movimientos de stock relacionados
+    console.log(`🗑️ Eliminando movimientos de stock relacionados para insumo ID: ${id}`);
+    const deleteMovimientosResult = await new sql.Request(transaction)
       .input("id", sql.Int, id)
       .query(`
-        UPDATE Stock SET Estado = 'I' 
-        WHERE ID_Insumo = @id AND Estado = 'A'
+        DELETE FROM Stock_Movimiento 
+        WHERE ID_Stock IN (SELECT ID_Stock FROM Stock WHERE ID_Insumo = @id)
       `);
+    
+    console.log(`✅ Movimientos eliminados: ${deleteMovimientosResult.rowsAffected[0]} registros`);
 
-    console.log(`📦 Stock desactivado para insumo ID: ${id}`);
+    // 3. TERCERO: Ahora eliminar los registros de Stock
+    console.log(`🗑️ Eliminando registros de Stock para insumo ID: ${id}`);
+    const deleteStockResult = await new sql.Request(transaction)
+      .input("id", sql.Int, id)
+      .query("DELETE FROM Stock WHERE ID_Insumo = @id");
 
-    // 2. Luego eliminamos el insumo
+    console.log(`✅ Stock eliminado: ${deleteStockResult.rowsAffected[0]} registros`);
+
+    // 4. CUARTO: Finalmente eliminar el insumo
+    console.log(`🗑️ Eliminando insumo ID: ${id}`);
     const result = await new sql.Request(transaction)
       .input("id", sql.Int, id)
       .query("DELETE FROM Insumos WHERE ID_Insumo = @id");
 
     if (result.rowsAffected[0] === 0) {
       await transaction.rollback();
-      return res.status(404).json({ error: "Insumo no encontrado" });
+      return res.status(404).json({ error: "Insumo no encontrado después de eliminar stock" });
     }
 
+    // ✅ TRANSACCIÓN EXITOSA - Hacer commit
     await transaction.commit();
+    
+    console.log(`✅ Insumo ID: ${id} eliminado correctamente`);
     return res.status(200).json({ 
-      message: "Insumo eliminado correctamente junto con su stock relacionado" 
+      message: "Insumo eliminado correctamente junto con su stock relacionado",
+      ID_Insumo: parseInt(id),
+      stock_eliminado: deleteStockResult.rowsAffected[0],
+      movimientos_eliminados: deleteMovimientosResult.rowsAffected[0]
     });
 
   } catch (err) {
-    await transaction.rollback();
-    console.error("deleteInsumo error:", err);
-    return res.status(500).json({ error: "Error al eliminar el insumo" });
+    // 🔴 MANEJO DE ERRORES - Verificar si la transacción está activa antes del rollback
+    try {
+      // Verificar si la transacción aún está activa
+      if (transaction._aborted === false && transaction._setRollback === false) {
+        await transaction.rollback();
+        console.log("❌ Transacción revertida debido a error");
+      } else {
+        console.log("ℹ️ Transacción ya estaba cerrada, no se requiere rollback");
+      }
+    } catch (rollbackError) {
+      console.error("❌ Error al intentar hacer rollback:", rollbackError.message);
+    }
+    
+    console.error("❌ deleteInsumo error:", err);
+    
+    // Manejar errores específicos de constraint
+    if (err.number === 547) {
+      return res.status(409).json({ 
+        error: "No se puede eliminar el insumo porque está siendo utilizado en otras tablas del sistema",
+        details: "El insumo puede estar relacionado con recetas, productos u otros registros del sistema"
+      });
+    }
+    
+    return res.status(500).json({ 
+      error: "Error al eliminar el insumo",
+      details: err.message 
+    });
   }
 };
-
 // 🔧 Función auxiliar: Actualizar stock con proveedor
 async function actualizarStockConProveedor(ID_Insumo, ID_Proveedor, Costo_Unitario, Fecha_Vencimiento, pool, transaction = null) {
   try {
@@ -418,6 +495,50 @@ async function actualizarStockConProveedor(ID_Insumo, ID_Proveedor, Costo_Unitar
     return true;
   } catch (error) {
     console.error(`❌ Error al actualizar stock para insumo ${ID_Insumo}:`, error);
+    throw error;
+  }
+}
+
+// ==============================
+// 🔧 Función auxiliar: Actualizar estado del insumo basado en stock
+// ==============================
+async function actualizarEstadoInsumo(ID_Insumo, pool, transaction = null) {
+  try {
+    const request = transaction ? new sql.Request(transaction) : pool.request();
+    
+    // Obtener el stock actual y el stock mínimo del insumo
+    const result = await request
+      .input("ID_Insumo", sql.Int, ID_Insumo)
+      .query(`
+        SELECT 
+          s.Cantidad_Recibida,
+          i.Stock_Min
+        FROM Stock s
+        INNER JOIN Insumos i ON s.ID_Insumo = i.ID_Insumo
+        WHERE s.ID_Insumo = @ID_Insumo AND s.Estado = 'A'
+      `);
+
+    if (result.recordset.length > 0) {
+      const stock = result.recordset[0];
+      const cantidadRecibida = stock.Cantidad_Recibida || 0;
+      const stockMin = stock.Stock_Min || 0;
+      
+      // Determinar el estado basado en la comparación
+      const nuevoEstado = cantidadRecibida < stockMin ? 'A' : 'D';
+      
+      // Actualizar el estado del insumo
+      await request
+        .input("NuevoEstado", sql.Char(1), nuevoEstado)
+        .input("ID_Insumo", sql.Int, ID_Insumo)
+        .query("UPDATE Insumos SET Estado = @NuevoEstado WHERE ID_Insumo = @ID_Insumo");
+      
+      console.log(`✅ Estado del insumo ${ID_Insumo} actualizado a: ${nuevoEstado} (Cantidad: ${cantidadRecibida}, Mínimo: ${stockMin})`);
+      return nuevoEstado;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`❌ Error al actualizar estado del insumo ${ID_Insumo}:`, error);
     throw error;
   }
 }

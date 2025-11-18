@@ -233,3 +233,51 @@ exports.deleteProveedor = async (req, res) => {
     return res.status(500).json({ error: "Error al eliminar el proveedor" });
   }
 };
+
+// ==============================
+// 🔄 Cambiar estado de proveedor (A=Activo, I=Inactivo)
+// ==============================
+exports.statusProveedor = async (req, res) => {
+  const { id } = req.params;
+  const { Estado } = req.body;
+
+  try {
+    // Validar que el estado sea válido
+    if (!Estado || (Estado !== 'A' && Estado !== 'I')) {
+      return res.status(400).json({ 
+        error: "Estado inválido. Use 'A' para Activo o 'I' para Inactivo" 
+      });
+    }
+
+    const pool = await getConnection();
+    
+    // Verificar si el proveedor existe
+    const checkResult = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT ID_Proveedor, Estado FROM Proveedor WHERE ID_Proveedor = @id");
+
+    if (!checkResult.recordset.length) {
+      return res.status(404).json({ error: "Proveedor no encontrado" });
+    }
+
+    // Actualizar solo el estado
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .input("Estado", sql.Char(1), Estado)
+      .query("UPDATE Proveedor SET Estado = @Estado WHERE ID_Proveedor = @id");
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Proveedor no encontrado" });
+    }
+
+    const estadoTexto = Estado === 'A' ? 'activado' : 'desactivado';
+    return res.status(200).json({ 
+      message: `Proveedor ${estadoTexto} correctamente`,
+      Estado: Estado
+    });
+
+  } catch (err) {
+    console.error("statusProveedor error:", err);
+    return res.status(500).json({ error: "Error al cambiar el estado del proveedor" });
+  }
+};

@@ -8,7 +8,7 @@ function mapToStock(row = {}) {
   const template = bdModel?.Stock || {
     ID_Stock: 0,
     ID_Insumo: 0,
-    ID_Proveedor: null, // Cambiado a null
+    ID_Proveedor: null,
     Cantidad_Recibida: 0,
     Costo_Unitario: 0.0,
     Costo_Total: 0.0,
@@ -36,7 +36,7 @@ function mapToMovimientoStock(row = {}) {
     ID_Stock_M: 0,
     ID_Stock: 0,
     Tipo_Mov: "Entrada",
-    Motivo: null, // Cambiado a null por defecto
+    Motivo: null,
     Cantidad: 0,
     Stock_ACT: 0,
     Usuario_ID: null,
@@ -49,7 +49,7 @@ function mapToMovimientoStock(row = {}) {
     ID_Stock_M: row.ID_Stock_M ?? template.ID_Stock_M,
     ID_Stock: row.ID_Stock ?? template.ID_Stock,
     Tipo_Mov: row.Tipo_Mov ?? template.Tipo_Mov,
-    Motivo: row.Motivo ?? template.Motivo, // Ahora puede ser null
+    Motivo: row.Motivo ?? template.Motivo,
     Cantidad: row.Cantidad ?? template.Cantidad,
     Stock_ACT: row.Stock_ACT ?? template.Stock_ACT,
     Usuario_ID: row.Usuario_ID ?? template.Usuario_ID,
@@ -57,6 +57,55 @@ function mapToMovimientoStock(row = {}) {
     Estado: row.Estado ?? template.Estado
   };
 }
+
+// ==============================
+// 🔧 Función auxiliar: Actualizar estado del insumo basado en stock (VERSIÓN CORREGIDA)
+// ==============================
+async function actualizarEstadoInsumo(ID_Insumo, pool, transaction = null) {
+  try {
+    // Crear un NUEVO request para evitar conflictos de parámetros
+    const newRequest = transaction ? new sql.Request(transaction) : new sql.Request(pool);
+    
+    // Obtener el stock actual y el stock mínimo del insumo
+    const result = await newRequest
+      .input("InsumoID", sql.Int, ID_Insumo) // Usar nombre diferente
+      .query(`
+        SELECT 
+          s.Cantidad_Recibida,
+          i.Stock_Min
+        FROM Stock s
+        INNER JOIN Insumos i ON s.ID_Insumo = i.ID_Insumo
+        WHERE s.ID_Insumo = @InsumoID AND s.Estado = 'A'
+      `);
+
+    if (result.recordset.length > 0) {
+      const stock = result.recordset[0];
+      const cantidadRecibida = stock.Cantidad_Recibida || 0;
+      const stockMin = stock.Stock_Min || 0;
+      
+      // Determinar el estado basado en la comparación
+      const nuevoEstado = cantidadRecibida < stockMin ? 'A' : 'D';
+      
+      // Crear OTRO NUEVO request para la actualización
+      const updateRequest = transaction ? new sql.Request(transaction) : new sql.Request(pool);
+      
+      // Actualizar el estado del insumo
+      await updateRequest
+        .input("EstadoParam", sql.Char(1), nuevoEstado)
+        .input("InsumoIDUpdate", sql.Int, ID_Insumo) // Usar nombre diferente
+        .query("UPDATE Insumos SET Estado = @EstadoParam WHERE ID_Insumo = @InsumoIDUpdate");
+      
+      console.log(`✅ Estado del insumo ${ID_Insumo} actualizado a: ${nuevoEstado} (Cantidad: ${cantidadRecibida}, Mínimo: ${stockMin})`);
+      return nuevoEstado;
+    }
+    
+    return null;
+  } catch (error) {
+    console.error(`❌ Error al actualizar estado del insumo ${ID_Insumo}:`, error);
+    throw error;
+  }
+}
+
 // ==============================
 // 📘 Obtener todos los registros de stock (activos)
 // ==============================
@@ -111,7 +160,6 @@ exports.createStock = async (req, res) => {
   } = req.body;
 
   try {
-    // Validación modificada: ID_Proveedor ya no es obligatorio
     if (!ID_Insumo || Cantidad_Recibida == null || Costo_Unitario == null) {
       return res.status(400).json({
         error: "Faltan campos obligatorios: ID_Insumo, Cantidad_Recibida o Costo_Unitario"
@@ -119,36 +167,46 @@ exports.createStock = async (req, res) => {
     }
 
     const pool = await getConnection();
-    const request = pool.request();
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
 
-    const costoTotalCalc = Costo_Total != null ? Costo_Total : Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
+    try {
+      const request = new sql.Request(transaction);
+      const costoTotalCalc = Costo_Total != null ? Costo_Total : Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
 
-    // Manejar ID_Proveedor null o vacío
-    let proveedorValue = ID_Proveedor;
-    if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
-      proveedorValue = null;
+      let proveedorValue = ID_Proveedor;
+      if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
+        proveedorValue = null;
+      }
+
+      await request
+        .input("ID_Insumo", sql.Int, ID_Insumo)
+        .input("ID_Proveedor", sql.Int, proveedorValue)
+        .input("Cantidad_Recibida", sql.Int, Cantidad_Recibida)
+        .input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario)
+        .input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc)
+        .input("Fecha_Entrada", sql.Date, Fecha_Entrada || new Date())
+        .input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento || null)
+        .input("Estado", sql.Char(1), Estado || "A")
+        .query(`
+          INSERT INTO Stock (
+            ID_Insumo, ID_Proveedor, Cantidad_Recibida,
+            Costo_Unitario, Costo_Total, Fecha_Entrada, Fecha_Vencimiento, Estado
+          ) VALUES (
+            @ID_Insumo, @ID_Proveedor, @Cantidad_Recibida,
+            @Costo_Unitario, @Costo_Total, @Fecha_Entrada, @Fecha_Vencimiento, @Estado
+          )
+        `);
+
+      // 🔄 ACTUALIZAR ESTADO DEL INSUMO AUTOMÁTICAMENTE
+      await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
+
+      await transaction.commit();
+      return res.status(201).json({ message: "Registro de stock creado correctamente" });
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
     }
-
-    await request
-      .input("ID_Insumo", sql.Int, ID_Insumo)
-      .input("ID_Proveedor", sql.Int, proveedorValue) // Puede ser null
-      .input("Cantidad_Recibida", sql.Int, Cantidad_Recibida)
-      .input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario)
-      .input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc)
-      .input("Fecha_Entrada", sql.Date, Fecha_Entrada || new Date())
-      .input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento || null)
-      .input("Estado", sql.Char(1), Estado || "A")
-      .query(`
-        INSERT INTO Stock (
-          ID_Insumo, ID_Proveedor, Cantidad_Recibida,
-          Costo_Unitario, Costo_Total, Fecha_Entrada, Fecha_Vencimiento, Estado
-        ) VALUES (
-          @ID_Insumo, @ID_Proveedor, @Cantidad_Recibida,
-          @Costo_Unitario, @Costo_Total, @Fecha_Entrada, @Fecha_Vencimiento, @Estado
-        )
-      `);
-
-    return res.status(201).json({ message: "Registro de stock creado correctamente" });
   } catch (err) {
     console.error("createStock error:", err);
     return res.status(500).json({ error: "Error al registrar el stock" });
@@ -156,7 +214,7 @@ exports.createStock = async (req, res) => {
 };
 
 // ==============================
-// 📙 Actualizar un registro de stock
+// 📙 Actualizar un registro de stock (VERSIÓN CORREGIDA - SIN DUPLICACIÓN)
 // ==============================
 exports.updateStock = async (req, res) => {
   const { id } = req.params;
@@ -172,41 +230,54 @@ exports.updateStock = async (req, res) => {
 
   try {
     const pool = await getConnection();
-    const request = pool.request();
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
 
-    // Manejar ID_Proveedor null o vacío
-    let proveedorValue = ID_Proveedor;
-    if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
-      proveedorValue = null;
+    try {
+      const request = new sql.Request(transaction);
+      
+      // Manejar ID_Proveedor null o vacío
+      let proveedorValue = ID_Proveedor;
+      if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
+        proveedorValue = null;
+      }
+
+      request.input("id", sql.Int, id);
+      request.input("ID_Insumo", sql.Int, ID_Insumo);
+      request.input("ID_Proveedor", sql.Int, proveedorValue);
+      request.input("Cantidad_Recibida", sql.Int, Cantidad_Recibida);
+      request.input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario);
+      request.input("Costo_Total", sql.Decimal(10, 2), Costo_Total);
+      request.input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento);
+      request.input("Estado", sql.Char(1), Estado);
+
+      const result = await request.query(`
+        UPDATE Stock
+        SET
+          ID_Insumo = @ID_Insumo,
+          ID_Proveedor = @ID_Proveedor,
+          Cantidad_Recibida = @Cantidad_Recibida,
+          Costo_Unitario = @Costo_Unitario,
+          Costo_Total = @Costo_Total,
+          Fecha_Vencimiento = @Fecha_Vencimiento,
+          Estado = @Estado
+        WHERE ID_Stock = @id
+      `);
+
+      if (result.rowsAffected[0] === 0) {
+        await transaction.rollback();
+        return res.status(404).json({ error: "Registro de stock no encontrado" });
+      }
+
+      // 🔄 ACTUALIZAR ESTADO DEL INSUMO AUTOMÁTICAMENTE
+      await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
+
+      await transaction.commit();
+      return res.status(200).json({ message: "Registro de stock actualizado correctamente" });
+    } catch (err) {
+      await transaction.rollback();
+      throw err;
     }
-
-    request.input("id", sql.Int, id);
-    request.input("ID_Insumo", sql.Int, ID_Insumo);
-    request.input("ID_Proveedor", sql.Int, proveedorValue); // Puede ser null
-    request.input("Cantidad_Recibida", sql.Int, Cantidad_Recibida);
-    request.input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario);
-    request.input("Costo_Total", sql.Decimal(10, 2), Costo_Total);
-    request.input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento);
-    request.input("Estado", sql.Char(1), Estado);
-
-    const result = await request.query(`
-      UPDATE Stock
-      SET
-        ID_Insumo = @ID_Insumo,
-        ID_Proveedor = @ID_Proveedor,
-        Cantidad_Recibida = @Cantidad_Recibida,
-        Costo_Unitario = @Costo_Unitario,
-        Costo_Total = @Costo_Total,
-        Fecha_Vencimiento = @Fecha_Vencimiento,
-        Estado = @Estado
-      WHERE ID_Stock = @id
-    `);
-
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Registro de stock no encontrado" });
-    }
-
-    return res.status(200).json({ message: "Registro de stock actualizado correctamente" });
   } catch (err) {
     console.error("updateStock error:", err);
     return res.status(500).json({ error: "Error al actualizar el stock" });
@@ -257,10 +328,9 @@ exports.getMovimientoStockById = async (req, res) => {
 exports.createMovimientoStock = async (req, res) => {
   const {
     ID_Stock,
-    Tipo_Mov, // 'Entrada' | 'Salida' | 'Ajuste'
-    Motivo, // Ahora es opcional
+    Tipo_Mov,
+    Motivo,
     Cantidad
-    // Usuario_ID ya no viene del body, viene del token
   } = req.body;
 
   try {
@@ -270,20 +340,20 @@ exports.createMovimientoStock = async (req, res) => {
       });
     }
 
-    // Obtener el usuario del token (middleware debería haberlo agregado)
     const Usuario_ID = req.user?.ID_Usuario || null;
-    console.log('Usuario del token:', req.user);
-    console.log('Usuario_ID para movimiento:', Usuario_ID);
-
     const pool = await getConnection();
     const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
     try {
-      // Obtener stock actual
+      // Obtener stock actual e ID_Insumo
       const reqGetStock = new sql.Request(transaction);
       reqGetStock.input("ID_Stock", sql.Int, ID_Stock);
-      const stockRes = await reqGetStock.query("SELECT Cantidad_Recibida FROM Stock WHERE ID_Stock = @ID_Stock");
+      const stockRes = await reqGetStock.query(`
+        SELECT s.Cantidad_Recibida, s.ID_Insumo 
+        FROM Stock s 
+        WHERE s.ID_Stock = @ID_Stock
+      `);
 
       if (!stockRes.recordset.length) {
         await transaction.rollback();
@@ -291,6 +361,7 @@ exports.createMovimientoStock = async (req, res) => {
       }
 
       const actual = Number(stockRes.recordset[0].Cantidad_Recibida ?? 0);
+      const ID_Insumo = stockRes.recordset[0].ID_Insumo;
       const tipoNorm = String(Tipo_Mov).toLowerCase();
 
       let nuevoStock;
@@ -307,7 +378,7 @@ exports.createMovimientoStock = async (req, res) => {
         return res.status(400).json({ error: "Tipo_Mov inválido. Use 'Entrada', 'Salida' o 'Ajuste'." });
       }
 
-      // Insert movimiento - Usuario_ID ahora viene del token
+      // Insertar movimiento
       const reqInsMov = new sql.Request(transaction);
       await reqInsMov
         .input("ID_Stock", sql.Int, ID_Stock)
@@ -315,7 +386,7 @@ exports.createMovimientoStock = async (req, res) => {
         .input("Motivo", sql.VarChar(100), Motivo || null)
         .input("Cantidad", sql.Int, Cantidad)
         .input("Stock_ACT", sql.Int, nuevoStock)
-        .input("Usuario_ID", sql.Int, Usuario_ID) // Del token, no del body
+        .input("Usuario_ID", sql.Int, Usuario_ID)
         .input("Fecha_Mov", sql.DateTime, new Date())
         .query(`
           INSERT INTO Stock_Movimiento (
@@ -331,11 +402,14 @@ exports.createMovimientoStock = async (req, res) => {
         .input("ID_Stock", sql.Int, ID_Stock)
         .query("UPDATE Stock SET Cantidad_Recibida = @nuevo WHERE ID_Stock = @ID_Stock");
 
+      // 🔄 ACTUALIZAR ESTADO DEL INSUMO AUTOMÁTICAMENTE
+      await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
+
       await transaction.commit();
       return res.status(201).json({ 
         message: "Movimiento registrado y stock actualizado correctamente", 
         Stock_ACT: nuevoStock,
-        Usuario_ID: Usuario_ID // Devolver el ID del usuario que realizó el movimiento
+        Usuario_ID: Usuario_ID
       });
     } catch (err) {
       await transaction.rollback();
@@ -349,15 +423,14 @@ exports.createMovimientoStock = async (req, res) => {
 };
 
 // ==============================
-// 📙 Actualizar movimiento de stock (ahora permite actualizar datos incluyendo motivo opcional)
+// 📙 Actualizar movimiento de stock
 // ==============================
 exports.updateMovimientoStock = async (req, res) => {
   const { id } = req.params;
   const {
     Tipo_Mov,
-    Motivo, // Ahora opcional
+    Motivo,
     Cantidad
-    // Usuario_ID ya no viene del body, viene del token
   } = req.body;
 
   try {
@@ -388,7 +461,7 @@ exports.updateMovimientoStock = async (req, res) => {
 
     if (Motivo !== undefined) {
       updateFields.push("Motivo = @Motivo");
-      request.input("Motivo", sql.VarChar(100), Motivo || null); // Permite null
+      request.input("Motivo", sql.VarChar(100), Motivo || null);
     }
 
     if (Cantidad !== undefined) {

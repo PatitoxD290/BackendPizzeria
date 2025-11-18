@@ -519,3 +519,53 @@ async function obtenerDetallesCompletos(ID_Combo, pool) {
 
   return detallesRes.recordset.map(mapToComboDetalle);
 }
+
+// ==================================================
+// 🔄 PATCH /combos/:id/status - CAMBIAR ESTADO DEL COMBO (A/I)
+// ==================================================
+exports.statusCombo = async (req, res) => {
+  const { id } = req.params;
+  const { Estado } = req.body;
+
+  // Validar que el estado sea válido
+  if (!Estado || (Estado !== 'A' && Estado !== 'I')) {
+    return res.status(400).json({ 
+      error: "Estado inválido. Debe ser 'A' (Activo) o 'I' (Inactivo)" 
+    });
+  }
+
+  try {
+    const pool = await getConnection();
+
+    // Verificar que el combo existe
+    const comboExistente = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT ID_Combo, Estado FROM Combos WHERE ID_Combo = @id");
+
+    if (!comboExistente.recordset.length) {
+      return res.status(404).json({ error: "Combo no encontrado" });
+    }
+
+    // Actualizar solo el estado
+    await pool.request()
+      .input("id", sql.Int, id)
+      .input("Estado", sql.Char(1), Estado)
+      .query("UPDATE Combos SET Estado = @Estado WHERE ID_Combo = @id");
+
+    const estadoTexto = Estado === 'A' ? 'activado' : 'desactivado';
+    
+    return res.status(200).json({ 
+      message: `Combo ${estadoTexto} correctamente`,
+      ID_Combo: parseInt(id),
+      Estado: Estado,
+      Estado_Texto: Estado === 'A' ? 'Activo' : 'Inactivo'
+    });
+
+  } catch (err) {
+    console.error("statusCombo error:", err);
+    return res.status(500).json({ 
+      error: "Error al cambiar el estado del combo",
+      details: err.message 
+    });
+  }
+};
