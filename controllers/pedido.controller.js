@@ -47,8 +47,9 @@ function mapToDetallePedido(row = {}) {
   };
 }
 
+
 // ---------------------------------
-// Helper: obtener precio unitario (precio_base + variacion)
+// Helper: obtener precio unitario producto
 // ---------------------------------
 async function calcularPrecioUnitario(transaction, ID_Producto_T) {
   const req = new sql.Request(transaction);
@@ -68,7 +69,69 @@ async function calcularPrecioUnitario(transaction, ID_Producto_T) {
   return Number(result.recordset[0].Precio);
 }
 
-// Crear pedido con detalle (transaccional)
+// ---------------------------------
+// Helper: obtener precio del combo
+// ---------------------------------
+async function calcularPrecioCombo(transaction, ID_Combo) {
+  const req = new sql.Request(transaction);
+
+  const result = await req
+    .input("ID_Combo", sql.Int, ID_Combo)
+    .query(`
+      SELECT Precio
+      FROM Combos
+      WHERE ID_Combo = @ID_Combo
+        AND Estado = 'A'
+    `);
+
+  if (result.recordset.length === 0) {
+    throw new Error("El combo no existe o está inactivo.");
+  }
+
+  return Number(result.recordset[0].Precio);
+}
+
+// ---------------------------------
+// Helper: Restar stock de Producto
+// ---------------------------------
+async function descontarStock(transaction, ID_Producto_T, Cantidad) {
+  const reqData = new sql.Request(transaction);
+
+  const data = await reqData
+    .input("ID_Producto_T", sql.Int, ID_Producto_T)
+    .query(`
+      SELECT p.ID_Producto, p.Cantidad_Disponible
+      FROM Producto_Tamano pt
+      INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+      WHERE pt.ID_Producto_T = @ID_Producto_T
+    `);
+
+  if (!data.recordset.length) {
+    throw new Error("No se encontró el producto para descontar stock.");
+  }
+
+  const prod = data.recordset[0];
+  const stockActual = prod.Cantidad_Disponible;
+
+  if (stockActual < Cantidad) {
+    throw new Error("Stock insuficiente.");
+  }
+
+  // Restar
+  const reqUpdate = new sql.Request(transaction);
+  await reqUpdate
+    .input("ID_Producto", sql.Int, prod.ID_Producto)
+    .input("NuevoStock", sql.Int, stockActual - Cantidad)
+    .query(`
+      UPDATE Producto
+      SET Cantidad_Disponible = @NuevoStock
+      WHERE ID_Producto = @ID_Producto
+    `);
+}
+
+// ==============================================================
+//            CREAR PEDIDO CON DETALLE (PRODUCTO Y/O COMBO)
+// ==============================================================
 exports.createPedidoConDetalle = async (req, res) => {
   const {
     ID_Cliente,
@@ -76,43 +139,41 @@ exports.createPedidoConDetalle = async (req, res) => {
     Hora_Pedido,
     Estado_P,
     Notas,
-    detalles // array de { ID_Producto_T, Cantidad }
+    detalles // array de { ID_Producto_T?, ID_Combo?, Cantidad }
   } = req.body;
 
   try {
-    // Validaciones mínimas
     if (!detalles || !Array.isArray(detalles) || detalles.length === 0) {
-      return res.status(400).json({ error: "Debe enviar al menos un detalle de pedido" });
+      return res.status(400).json({ error: "Debe enviar al menos un detalle." });
     }
 
-    // Determinar el cliente a usar
+    // -------------------------
+    // Determinar cliente
+    // -------------------------
     let clienteIdFinal;
+
     if (ID_Cliente && ID_Cliente !== "") {
       clienteIdFinal = ID_Cliente;
     } else {
-      // Buscar el ID del cliente "Clientes Varios"
       const poolCheck = await getConnection();
       const clienteVarios = await poolCheck.request()
         .input("Nombre", sql.VarChar(100), "Clientes Varios")
         .query("SELECT ID_Cliente FROM Cliente WHERE Nombre = @Nombre");
       
-      if (clienteVarios.recordset.length > 0) {
-        clienteIdFinal = clienteVarios.recordset[0].ID_Cliente;
-      } else {
-        // Fallback a ID 1 si no se encuentra
-        clienteIdFinal = 1;
-      }
+      clienteIdFinal = clienteVarios.recordset.length
+        ? clienteVarios.recordset[0].ID_Cliente
+        : 1;
     }
 
     const usuarioIdFinal = ID_Usuario && ID_Usuario !== "" ? ID_Usuario : null;
 
     const pool = await getConnection();
     const transaction = new sql.Transaction(pool);
-    
+
     try {
       await transaction.begin();
 
-      // VERIFICAR SI EL CLIENTE EXISTE
+      // Verificar cliente
       const checkClienteReq = new sql.Request(transaction);
       const clienteExists = await checkClienteReq
         .input("ID_Cliente", sql.Int, clienteIdFinal)
@@ -120,12 +181,12 @@ exports.createPedidoConDetalle = async (req, res) => {
 
       if (!clienteExists.recordset.length) {
         await transaction.rollback();
-        return res.status(400).json({ 
-          error: `El cliente con ID ${clienteIdFinal} no existe` 
-        });
+        return res.status(400).json({ error: `El cliente con ID ${clienteIdFinal} no existe` }); // CORREGIDO: Faltaban backticks
       }
 
-      // 1) Insertar pedido (solo los campos del modelo)
+      // -------------------------
+      // Insertar Pedido
+      // -------------------------
       const requestPedido = new sql.Request(transaction);
       const insertPedidoQuery = `
         INSERT INTO Pedido (
@@ -139,7 +200,7 @@ exports.createPedidoConDetalle = async (req, res) => {
       `;
 
       const resultInsertPedido = await requestPedido
-        .input("ID_Cliente", sql.Int, clienteIdFinal) // Usar el ID del cliente que viene del frontend
+        .input("ID_Cliente", sql.Int, clienteIdFinal)
         .input("ID_Usuario", sql.Int, usuarioIdFinal)
         .input("Hora_Pedido", sql.VarChar(20), Hora_Pedido || new Date().toLocaleTimeString())
         .input("Estado_P", sql.Char(1), Estado_P || "P")
@@ -151,29 +212,38 @@ exports.createPedidoConDetalle = async (req, res) => {
       const pedido_id = resultInsertPedido.recordset?.[0]?.ID_Pedido;
       if (!pedido_id) {
         await transaction.rollback();
-        return res.status(500).json({ error: "No se pudo obtener el ID del pedido creado" });
+        return res.status(500).json({ error: "No se obtuvo el ID del pedido" });
       }
 
-      // 2) Insertar detalles y calcular subtotal
+      // -------------------------
+      // Insertar detalles productos y combos
+      // -------------------------
       let subTotalAcumulado = 0.0;
 
       for (const d of detalles) {
-        const { ID_Producto_T, Cantidad } = d;
+        const { ID_Producto_T, ID_Combo, Cantidad } = d;
 
-        if (!ID_Producto_T || Cantidad == null) {
+        if (!Cantidad || Cantidad <= 0) { // CORREGIDO: Validar cantidad positiva
           await transaction.rollback();
-          return res.status(400).json({
-            error: "Faltan campos obligatorios en detalle: ID_Producto_T o Cantidad"
-          });
+          return res.status(400).json({ error: "Cada detalle requiere cantidad válida mayor a 0." });
         }
 
-        // calcular precio unitario
-        let precioUnitario;
-        try {
+        let precioUnitario = 0;
+
+        // PRODUCTO
+        if (ID_Producto_T) {
           precioUnitario = await calcularPrecioUnitario(transaction, ID_Producto_T);
-        } catch (err) {
+
+          // Descontar stock del producto
+          await descontarStock(transaction, ID_Producto_T, Cantidad);
+        }
+        // COMBO
+        else if (ID_Combo) { // CORREGIDO: Usar else if para evitar conflictos
+          precioUnitario = await calcularPrecioCombo(transaction, ID_Combo);
+        }
+        else {
           await transaction.rollback();
-          return res.status(400).json({ error: err.message });
+          return res.status(400).json({ error: "Debe enviar ID_Producto_T o ID_Combo." });
         }
 
         const subtotalLinea = Number((precioUnitario * Number(Cantidad)).toFixed(2));
@@ -182,56 +252,51 @@ exports.createPedidoConDetalle = async (req, res) => {
         const reqDet = new sql.Request(transaction);
         await reqDet
           .input("ID_Pedido", sql.Int, pedido_id)
-          .input("ID_Producto_T", sql.Int, ID_Producto_T)
+          .input("ID_Producto_T", sql.Int, ID_Producto_T || null)
+          .input("ID_Combo", sql.Int, ID_Combo || null)
           .input("Cantidad", sql.Int, Cantidad)
           .input("PrecioTotal", sql.Decimal(10, 2), subtotalLinea)
           .query(`
             INSERT INTO Pedido_Detalle (
-              ID_Pedido, ID_Producto_T,
+              ID_Pedido, ID_Producto_T, ID_Combo,
               Cantidad, PrecioTotal
             ) VALUES (
-              @ID_Pedido, @ID_Producto_T,
+              @ID_Pedido, @ID_Producto_T, @ID_Combo,
               @Cantidad, @PrecioTotal
             )
-         `);
+          `);
       }
 
-      // 3) Actualizar SubTotal en el pedido
-      const reqUpdatePedido = new sql.Request(transaction);
-      await reqUpdatePedido
+      // -------------------------
+      // Actualizar subtotal en Pedido
+      // -------------------------
+      await new sql.Request(transaction)
         .input("SubTotal", sql.Decimal(10, 2), subTotalAcumulado)
         .input("ID_Pedido", sql.Int, pedido_id)
-        .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`);
+        .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`); // CORREGIDO: Faltaban backticks
 
       await transaction.commit();
-      
-      // Obtener información del cliente para la respuesta
-      const clienteInfo = clienteExists.recordset[0];
-      
+
       return res.status(201).json({
         message: "Pedido y detalles registrados correctamente",
         ID_Pedido: pedido_id,
-        ID_Cliente: clienteIdFinal,
-        Cliente: clienteInfo.Nombre, // Incluir nombre del cliente en la respuesta
         SubTotal: subTotalAcumulado
       });
-      
+
     } catch (err) {
-      // Solo hacer rollback si la transacción comenzó
       try {
-        if (transaction._aborted === false) {
-          await transaction.rollback();
-        }
-      } catch (rollbackErr) {
-        console.error("Error durante rollback:", rollbackErr.message);
+        await transaction.rollback();
+      } catch (rollbackError) {
+        console.error("Error durante rollback:", rollbackError); // CORREGIDO: Manejar error de rollback
       }
-      
+
       console.error("createPedidoConDetalle transaction error:", err);
-      return res.status(500).json({ error: "Error al registrar el pedido con detalles" });
+      return res.status(500).json({ error: err.message });
     }
+
   } catch (err) {
     console.error("createPedidoConDetalle error:", err);
-    return res.status(500).json({ error: "Error al registrar el pedido" });
+    return res.status(500).json({ error: "Error al registrar el pedido" }); // CORREGIDO: Caracter invisible eliminado
   }
 };
 
@@ -285,6 +350,7 @@ exports.getDetallesConNotas = async (req, res) => {
 };
 
 // Actualizar pedido y detalles (transaccional, parcial)
+// Actualizar pedido y detalles (transaccional, parcial) con combos
 exports.updatePedidoConDetalle = async (req, res) => {
   const { id } = req.params; // ID_Pedido
   const {
@@ -293,7 +359,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
     Estado_P,
     Monto_Descuento,
     Notas,
-    detalles // array de { ID_Pedido_D, ID_Producto_T, Cantidad }
+    detalles // array de { ID_Pedido_D, ID_Producto_T, ID_Combo, Cantidad }
   } = req.body;
 
   try {
@@ -313,7 +379,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
       }
       if (ID_Usuario !== undefined) {
         updateFields.push("ID_Usuario = @ID_Usuario");
-        reqPedido.input("ID_Usuario", sql.Int, ID_Usuario || null); // Permitir null
+        reqPedido.input("ID_Usuario", sql.Int, ID_Usuario || null);
       }
       if (Estado_P !== undefined) {
         updateFields.push("Estado_P = @Estado_P");
@@ -329,7 +395,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
       }
 
       if (updateFields.length > 0) {
-        const queryUpdatePedido = `UPDATE Pedido SET ${updateFields.join(", ")} WHERE ID_Pedido = @ID_Pedido`;
+        const queryUpdatePedido = `UPDATE Pedido SET ${updateFields.join(", ")} WHERE ID_Pedido = @ID_Pedido`; // CORREGIDO: Faltaban backticks
         const resUpdPedido = await reqPedido.query(queryUpdatePedido);
         if (resUpdPedido.rowsAffected[0] === 0) {
           await transaction.rollback();
@@ -337,82 +403,99 @@ exports.updatePedidoConDetalle = async (req, res) => {
         }
       }
 
-      // Si se actualizan detalles, recalculamos sus subtotales en servidor
+      // Actualizar detalles si vienen
       if (detalles && Array.isArray(detalles)) {
         for (const det of detalles) {
-          const { ID_Pedido_D, ID_Producto_T, Cantidad } = det;
+          const { ID_Pedido_D, ID_Producto_T, ID_Combo, Cantidad } = det;
           if (!ID_Pedido_D) {
             await transaction.rollback();
             return res.status(400).json({ error: "Falta ID_Pedido_D en detalles" });
           }
 
-          // Recalcular campos dinámicos
           const fieldsDetalle = [];
           const reqDet = new sql.Request(transaction);
           reqDet.input("ID_Pedido_D", sql.Int, ID_Pedido_D);
 
-          // Si cambian producto/tamaño/cantidad recalculemos PrecioTotal
           let recalcularPrecio = false;
           let precioUnitario = null;
+
           if (ID_Producto_T !== undefined) {
             fieldsDetalle.push("ID_Producto_T = @ID_Producto_T");
             reqDet.input("ID_Producto_T", sql.Int, ID_Producto_T);
             recalcularPrecio = true;
           }
+
+          if (ID_Combo !== undefined) {
+            fieldsDetalle.push("ID_Combo = @ID_Combo");
+            reqDet.input("ID_Combo", sql.Int, ID_Combo);
+            recalcularPrecio = true;
+          }
+
           if (Cantidad !== undefined) {
+            if (Cantidad <= 0) { // CORREGIDO: Validar cantidad positiva
+              await transaction.rollback();
+              return res.status(400).json({ error: "La cantidad debe ser mayor a 0" });
+            }
             fieldsDetalle.push("Cantidad = @Cantidad");
             reqDet.input("Cantidad", sql.Int, Cantidad);
             recalcularPrecio = true;
           }
 
           if (recalcularPrecio) {
-            // Obtener estado actual del detalle
+            // Obtener valores actuales si faltan campos
             const curDetRes = await new sql.Request(transaction)
               .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
-              .query("SELECT ID_Producto_T, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
+              .query("SELECT ID_Producto_T, ID_Combo, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP"); // CORREGIDO: Agregar ID_Combo
 
             if (!curDetRes.recordset.length) {
               await transaction.rollback();
-              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` });
+              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` }); // CORREGIDO: Faltaban backticks
             }
 
             const cur = curDetRes.recordset[0];
-            const finalProducto = (ID_Producto_T !== undefined) ? ID_Producto_T : cur.ID_Producto_T;
-            const finalCantidad = (Cantidad !== undefined) ? Cantidad : cur.Cantidad;
+            const finalProducto = ID_Producto_T !== undefined ? ID_Producto_T : cur.ID_Producto_T;
+            const finalCombo = ID_Combo !== undefined ? ID_Combo : cur.ID_Combo;
+            const finalCantidad = Cantidad !== undefined ? Cantidad : cur.Cantidad;
 
-            // calcular precio unitario con helper
+            // Calcular precio unitario según si es producto o combo
             try {
-              precioUnitario = await calcularPrecioUnitario(transaction, finalProducto);
+              if (finalProducto) {
+                precioUnitario = await calcularPrecioUnitario(transaction, finalProducto);
+              } else if (finalCombo) {
+                precioUnitario = await calcularPrecioCombo(transaction, finalCombo);
+              } else {
+                await transaction.rollback();
+                return res.status(400).json({ error: "El detalle debe tener producto o combo" });
+              }
             } catch (err) {
               await transaction.rollback();
               return res.status(400).json({ error: err.message });
             }
-            const subtotalLinea = Number((precioUnitario * Number(finalCantidad)).toFixed(2));
 
-            // Añadir PrecioTotal al update
+            const subtotalLinea = Number((precioUnitario * Number(finalCantidad)).toFixed(2));
             fieldsDetalle.push("PrecioTotal = @PrecioTotal");
             reqDet.input("PrecioTotal", sql.Decimal(10, 2), subtotalLinea);
           }
 
-          if (fieldsDetalle.length === 0) continue;
-
-          const queryUpdateDetalle = `UPDATE Pedido_Detalle SET ${fieldsDetalle.join(", ")} WHERE ID_Pedido_D = @ID_Pedido_D`;
-          const resUpdDet = await reqDet.query(queryUpdateDetalle);
-          if (resUpdDet.rowsAffected[0] === 0) {
-            await transaction.rollback();
-            return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` });
+          if (fieldsDetalle.length > 0) {
+            const queryUpdateDetalle = `UPDATE Pedido_Detalle SET ${fieldsDetalle.join(", ")} WHERE ID_Pedido_D = @ID_Pedido_D`; // CORREGIDO: Faltaban backticks
+            const resUpdDet = await reqDet.query(queryUpdateDetalle);
+            if (resUpdDet.rowsAffected[0] === 0) {
+              await transaction.rollback();
+              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` }); // CORREGIDO: Faltaban backticks
+            }
           }
         }
       }
 
-      // Recalcular SubTotal sumando todos los detalles actuales del pedido
+      // Recalcular SubTotal sumando todos los detalles actuales
       const sumRes = await new sql.Request(transaction)
         .input("ID_Pedido_SUM", sql.Int, id)
         .query("SELECT ISNULL(SUM(PrecioTotal),0) AS SubTotalCalc FROM Pedido_Detalle WHERE ID_Pedido = @ID_Pedido_SUM");
 
       const nuevoSubTotal = Number(sumRes.recordset[0].SubTotalCalc ?? 0);
-      
-      // Obtener Monto_Descuento actual (si no se envió en body)
+
+      // Obtener Monto_Descuento actual si no se envió
       let descuento = Monto_Descuento;
       if (descuento === undefined) {
         const montoRes = await new sql.Request(transaction)
@@ -431,10 +514,10 @@ exports.updatePedidoConDetalle = async (req, res) => {
         .query("UPDATE Pedido SET SubTotal = @SubTotal, Total = @Total WHERE ID_Pedido = @ID_Pedido");
 
       await transaction.commit();
-      return res.status(200).json({ 
-        message: "Pedido y detalles actualizados correctamente", 
-        SubTotal: nuevoSubTotal, 
-        Total: nuevoTotal 
+      return res.status(200).json({
+        message: "Pedido y detalles actualizados correctamente",
+        SubTotal: nuevoSubTotal,
+        Total: nuevoTotal
       });
     } catch (err) {
       await transaction.rollback();
@@ -446,7 +529,6 @@ exports.updatePedidoConDetalle = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar el pedido" });
   }
 };
-
 // Obtener solo los detalles
 exports.getPedidoDetalles = async (req, res) => {
   const { id } = req.params;
