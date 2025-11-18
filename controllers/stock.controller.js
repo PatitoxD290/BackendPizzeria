@@ -153,7 +153,7 @@ exports.createStock = async (req, res) => {
     ID_Proveedor,
     Cantidad_Recibida,
     Costo_Unitario,
-    Costo_Total,
+    Costo_Total, // Este campo será ignorado y calculado automáticamente
     Fecha_Entrada,
     Fecha_Vencimiento,
     Estado
@@ -172,7 +172,11 @@ exports.createStock = async (req, res) => {
 
     try {
       const request = new sql.Request(transaction);
-      const costoTotalCalc = Costo_Total != null ? Costo_Total : Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
+      
+      // 🔥 CALCULAR COSTO_TOTAL AUTOMÁTICAMENTE
+      const costoTotalCalc = Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
+      
+      console.log(`💰 Cálculo automático de Costo_Total: ${Cantidad_Recibida} * ${Costo_Unitario} = ${costoTotalCalc}`);
 
       let proveedorValue = ID_Proveedor;
       if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
@@ -184,7 +188,7 @@ exports.createStock = async (req, res) => {
         .input("ID_Proveedor", sql.Int, proveedorValue)
         .input("Cantidad_Recibida", sql.Int, Cantidad_Recibida)
         .input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario)
-        .input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc)
+        .input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc) // Usar el cálculo automático
         .input("Fecha_Entrada", sql.Date, Fecha_Entrada || new Date())
         .input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento || null)
         .input("Estado", sql.Char(1), Estado || "A")
@@ -202,7 +206,10 @@ exports.createStock = async (req, res) => {
       await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
 
       await transaction.commit();
-      return res.status(201).json({ message: "Registro de stock creado correctamente" });
+      return res.status(201).json({ 
+        message: "Registro de stock creado correctamente",
+        costo_calculado: costoTotalCalc // Opcional: devolver el cálculo para verificación
+      });
     } catch (err) {
       await transaction.rollback();
       throw err;
@@ -223,7 +230,7 @@ exports.updateStock = async (req, res) => {
     ID_Proveedor,
     Cantidad_Recibida,
     Costo_Unitario,
-    Costo_Total,
+    Costo_Total, // Este campo será ignorado y calculado automáticamente
     Fecha_Vencimiento,
     Estado
   } = req.body;
@@ -236,6 +243,11 @@ exports.updateStock = async (req, res) => {
     try {
       const request = new sql.Request(transaction);
       
+      // 🔥 CALCULAR COSTO_TOTAL AUTOMÁTICAMENTE
+      const costoTotalCalc = Number((Cantidad_Recibida * Costo_Unitario).toFixed(2));
+      
+      console.log(`💰 Actualización - Cálculo automático de Costo_Total: ${Cantidad_Recibida} * ${Costo_Unitario} = ${costoTotalCalc}`);
+
       // Manejar ID_Proveedor null o vacío
       let proveedorValue = ID_Proveedor;
       if (ID_Proveedor === "" || ID_Proveedor === null || ID_Proveedor === undefined) {
@@ -247,7 +259,7 @@ exports.updateStock = async (req, res) => {
       request.input("ID_Proveedor", sql.Int, proveedorValue);
       request.input("Cantidad_Recibida", sql.Int, Cantidad_Recibida);
       request.input("Costo_Unitario", sql.Decimal(10, 2), Costo_Unitario);
-      request.input("Costo_Total", sql.Decimal(10, 2), Costo_Total);
+      request.input("Costo_Total", sql.Decimal(10, 2), costoTotalCalc); // Usar el cálculo automático
       request.input("Fecha_Vencimiento", sql.Date, Fecha_Vencimiento);
       request.input("Estado", sql.Char(1), Estado);
 
@@ -273,7 +285,10 @@ exports.updateStock = async (req, res) => {
       await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
 
       await transaction.commit();
-      return res.status(200).json({ message: "Registro de stock actualizado correctamente" });
+      return res.status(200).json({ 
+        message: "Registro de stock actualizado correctamente",
+        costo_calculado: costoTotalCalc // Opcional: devolver el cálculo para verificación
+      });
     } catch (err) {
       await transaction.rollback();
       throw err;
@@ -346,11 +361,11 @@ exports.createMovimientoStock = async (req, res) => {
     await transaction.begin();
 
     try {
-      // Obtener stock actual e ID_Insumo
+      // Obtener stock actual, ID_Insumo y Costo_Unitario
       const reqGetStock = new sql.Request(transaction);
       reqGetStock.input("ID_Stock", sql.Int, ID_Stock);
       const stockRes = await reqGetStock.query(`
-        SELECT s.Cantidad_Recibida, s.ID_Insumo 
+        SELECT s.Cantidad_Recibida, s.ID_Insumo, s.Costo_Unitario 
         FROM Stock s 
         WHERE s.ID_Stock = @ID_Stock
       `);
@@ -362,6 +377,7 @@ exports.createMovimientoStock = async (req, res) => {
 
       const actual = Number(stockRes.recordset[0].Cantidad_Recibida ?? 0);
       const ID_Insumo = stockRes.recordset[0].ID_Insumo;
+      const costoUnitario = Number(stockRes.recordset[0].Costo_Unitario ?? 0);
       const tipoNorm = String(Tipo_Mov).toLowerCase();
 
       let nuevoStock;
@@ -377,6 +393,11 @@ exports.createMovimientoStock = async (req, res) => {
         await transaction.rollback();
         return res.status(400).json({ error: "Tipo_Mov inválido. Use 'Entrada', 'Salida' o 'Ajuste'." });
       }
+
+      // 🔥 CALCULAR NUEVO COSTO_TOTAL BASADO EN LA NUEVA CANTIDAD
+      const nuevoCostoTotal = Number((nuevoStock * costoUnitario).toFixed(2));
+      
+      console.log(`💰 Movimiento - Nuevo Costo_Total: ${nuevoStock} * ${costoUnitario} = ${nuevoCostoTotal}`);
 
       // Insertar movimiento
       const reqInsMov = new sql.Request(transaction);
@@ -396,11 +417,17 @@ exports.createMovimientoStock = async (req, res) => {
           )
         `);
 
-      // Actualizar Stock.cantidad_recibida
+      // Actualizar Stock.cantidad_recibida Y Costo_Total
       await new sql.Request(transaction)
-        .input("nuevo", sql.Int, nuevoStock)
+        .input("nuevoStock", sql.Int, nuevoStock)
+        .input("nuevoCostoTotal", sql.Decimal(10, 2), nuevoCostoTotal)
         .input("ID_Stock", sql.Int, ID_Stock)
-        .query("UPDATE Stock SET Cantidad_Recibida = @nuevo WHERE ID_Stock = @ID_Stock");
+        .query(`
+          UPDATE Stock 
+          SET Cantidad_Recibida = @nuevoStock, 
+              Costo_Total = @nuevoCostoTotal 
+          WHERE ID_Stock = @ID_Stock
+        `);
 
       // 🔄 ACTUALIZAR ESTADO DEL INSUMO AUTOMÁTICAMENTE
       await actualizarEstadoInsumo(ID_Insumo, pool, transaction);
@@ -409,6 +436,7 @@ exports.createMovimientoStock = async (req, res) => {
       return res.status(201).json({ 
         message: "Movimiento registrado y stock actualizado correctamente", 
         Stock_ACT: nuevoStock,
+        Costo_Total_Actualizado: nuevoCostoTotal,
         Usuario_ID: Usuario_ID
       });
     } catch (err) {
