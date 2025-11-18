@@ -669,3 +669,103 @@ exports.statusPedido = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar el estado del pedido" });
   }
 };
+
+// ==============================
+// 🔹 Obtener pedidos del día de hoy (todos los estados)
+// ==============================
+exports.getPedidosHoy = async (_req, res) => {
+  try {
+    const pool = await getConnection();
+    
+    // Primero obtener los pedidos del día
+    const pedidosQuery = `
+      SELECT 
+        p.ID_Pedido,
+        p.ID_Cliente,
+        p.ID_Usuario,
+        p.Hora_Pedido,
+        p.Estado_P,
+        p.SubTotal,
+        p.Notas,
+        p.Fecha_Registro,
+        c.Nombre AS Cliente_Nombre,
+        u.Perfil AS Usuario_Perfil
+      FROM Pedido p
+      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      LEFT JOIN Usuario u ON p.ID_Usuario = u.ID_Usuario
+      WHERE CAST(p.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+      ORDER BY p.Fecha_Registro DESC, p.Hora_Pedido ASC
+    `;
+
+    const pedidosResult = await pool.request().query(pedidosQuery);
+    const pedidos = pedidosResult.recordset || [];
+
+    // Para cada pedido, obtener sus detalles por separado
+    const pedidosConDetalles = await Promise.all(
+      pedidos.map(async (pedido) => {
+        const detallesQuery = `
+          SELECT 
+            pd.Cantidad,
+            pr.Nombre AS nombre_producto,
+            t.Tamano AS nombre_tamano
+          FROM Pedido_Detalle pd
+          INNER JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+          INNER JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+          INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+          WHERE pd.ID_Pedido = @ID_Pedido
+          ORDER BY pd.ID_Pedido_D
+        `;
+
+        const detallesResult = await pool.request()
+          .input("ID_Pedido", sql.Int, pedido.ID_Pedido)
+          .query(detallesQuery);
+
+        const detallesTexto = detallesResult.recordset
+          .map(d => `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`)
+          .join(", ");
+
+        return {
+          ID_Pedido: pedido.ID_Pedido,
+          ID_Cliente: pedido.ID_Cliente,
+          ID_Usuario: pedido.ID_Usuario,
+          Hora_Pedido: pedido.Hora_Pedido,
+          Estado_P: pedido.Estado_P,
+          SubTotal: pedido.SubTotal,
+          Notas: pedido.Notas,
+          Fecha_Registro: pedido.Fecha_Registro,
+          Cliente_Nombre: pedido.Cliente_Nombre || "Cliente Varios",
+          Usuario_Perfil: pedido.Usuario_Perfil,
+          Detalles_Pedido: detallesTexto || "",
+          Descripcion_Estado: {
+            'P': 'Pendiente',
+            'E': 'Entregado',
+            'C': 'Cancelado'
+          }[pedido.Estado_P]
+        };
+      })
+    );
+
+    // Calcular estadísticas del día
+    const totalPedidos = pedidosConDetalles.length;
+    const pedidosPendientes = pedidosConDetalles.filter(p => p.Estado_P === 'P').length;
+    const pedidosEntregados = pedidosConDetalles.filter(p => p.Estado_P === 'E').length;
+    const pedidosCancelados = pedidosConDetalles.filter(p => p.Estado_P === 'C').length;
+    const totalIngresos = pedidosConDetalles.reduce((sum, pedido) => sum + (Number(pedido.SubTotal) || 0), 0);
+
+    res.status(200).json({
+      pedidos: pedidosConDetalles,
+      estadisticas: {
+        totalPedidos,
+        pedidosPendientes,
+        pedidosEntregados,
+        pedidosCancelados,
+        totalIngresos: Number(totalIngresos.toFixed(2)),
+        fecha: new Date().toISOString().split('T')[0]
+      }
+    });
+
+  } catch (err) {
+    console.error("getPedidosHoy error:", err);
+    return res.status(500).json({ error: "Error al obtener los pedidos del día" });
+  }
+};

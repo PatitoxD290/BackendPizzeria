@@ -4,7 +4,7 @@ const pedidoController = require("../controllers/pedido.controller");
 const { verifyToken } = require("../middlewares/auth.middleware");
 
 router.get("/pedidos", pedidoController.getPedidos);
-
+router.get("/pedidos/hoy", pedidoController.getPedidosHoy); 
 router.get("/pedidos/:id", verifyToken, pedidoController.getPedidoById);
 //  Obtener solo los detalles del pedido
 router.get("/pedidos/:id/detalles", verifyToken, pedidoController.getPedidoDetalles);

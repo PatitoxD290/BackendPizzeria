@@ -476,3 +476,302 @@ exports.detallesVenta = async (req, res) => {
     res.status(500).json({ error: "Error al obtener los detalles de la venta" });
   }
 };
+
+// ==============================
+// 🔹 Ventas del día de hoy
+// ==============================
+exports.getVentasHoy = async (_req, res) => {
+  try {
+    const pool = await getConnection();
+    
+    const sqlQuery = `
+      SELECT 
+        v.ID_Venta,
+        v.ID_Pedido,
+        v.Tipo_Venta,
+        v.Fecha_Registro,
+        c.Nombre AS Cliente_Nombre,
+        p.Estado_P,
+        v.Metodo_Pago,
+        v.Lugar_Emision,
+        v.IGV,
+        v.Total,
+        v.Monto_Recibido,
+        v.Vuelto,
+        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+      FROM Ventas v
+      INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      WHERE CAST(v.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+      GROUP BY 
+        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
+        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
+        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
+      ORDER BY v.Fecha_Registro DESC
+    `;
+
+    const result = await pool.request().query(sqlQuery);
+
+    const ventas = (result.recordset || []).map(r => ({
+      ID_Venta: r.ID_Venta,
+      ID_Pedido: r.ID_Pedido,
+      Tipo_Venta: r.Tipo_Venta,
+      Fecha_Registro: r.Fecha_Registro,
+      Cliente_Nombre: r.Cliente_Nombre,
+      Estado_Pedido: r.Estado_P,
+      Metodo_Pago: r.Metodo_Pago,
+      Lugar_Emision: r.Lugar_Emision,
+      IGV: r.IGV,
+      Total: r.Total,
+      Monto_Recibido: r.Monto_Recibido,
+      Vuelto: r.Vuelto,
+      Detalles_Pedido: r.Detalles_Pedido || ""
+    }));
+
+    // Calcular estadísticas del día
+    const estadisticas = {
+      totalVentas: ventas.length,
+      totalIngresos: ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0),
+      promedioVenta: ventas.length > 0 ? 
+        ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0) / ventas.length : 0,
+      fecha: new Date().toISOString().split('T')[0]
+    };
+
+    res.status(200).json({
+      ventas,
+      estadisticas
+    });
+
+  } catch (err) {
+    console.error("getVentasHoy error:", err);
+    res.status(500).json({ error: "Error al obtener las ventas del día" });
+  }
+};
+
+// ==============================
+// 🔹 Ventas por período (día, semana, mes, año)
+// ==============================
+exports.getVentasPorPeriodo = async (req, res) => {
+  try {
+    const { periodo, fecha } = req.query; // periodo: 'dia', 'semana', 'mes', 'año'
+    
+    if (!periodo) {
+      return res.status(400).json({ 
+        error: "Se requiere el parámetro 'periodo' (dia, semana, mes, año)" 
+      });
+    }
+
+    const pool = await getConnection();
+    let whereClause = "";
+    let fechaInicio, fechaFin;
+
+    // Determinar el rango de fechas según el período
+    switch (periodo.toLowerCase()) {
+      case 'dia':
+        const fechaConsulta = fecha ? new Date(fecha) : new Date();
+        fechaInicio = new Date(fechaConsulta);
+        fechaInicio.setHours(0, 0, 0, 0);
+        fechaFin = new Date(fechaConsulta);
+        fechaFin.setHours(23, 59, 59, 999);
+        
+        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
+        break;
+
+      case 'semana':
+        const hoy = fecha ? new Date(fecha) : new Date();
+        const inicioSemana = new Date(hoy);
+        inicioSemana.setDate(hoy.getDate() - hoy.getDay()); // Domingo de esta semana
+        inicioSemana.setHours(0, 0, 0, 0);
+        
+        const finSemana = new Date(inicioSemana);
+        finSemana.setDate(inicioSemana.getDate() + 6); // Sábado de esta semana
+        finSemana.setHours(23, 59, 59, 999);
+        
+        fechaInicio = inicioSemana;
+        fechaFin = finSemana;
+        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
+        break;
+
+      case 'mes':
+        const añoMes = fecha ? new Date(fecha) : new Date();
+        const año = añoMes.getFullYear();
+        const mes = añoMes.getMonth();
+        
+        fechaInicio = new Date(año, mes, 1);
+        fechaFin = new Date(año, mes + 1, 0, 23, 59, 59, 999);
+        
+        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
+        break;
+
+      case 'año':
+        const añoConsulta = fecha ? new Date(fecha).getFullYear() : new Date().getFullYear();
+        
+        fechaInicio = new Date(añoConsulta, 0, 1); // 1 de Enero
+        fechaFin = new Date(añoConsulta, 11, 31, 23, 59, 59, 999); // 31 de Diciembre
+        
+        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
+        break;
+
+      default:
+        return res.status(400).json({ 
+          error: "Período no válido. Use: dia, semana, mes, año" 
+        });
+    }
+
+    const sqlQuery = `
+      SELECT 
+        v.ID_Venta,
+        v.ID_Pedido,
+        v.Tipo_Venta,
+        v.Fecha_Registro,
+        c.Nombre AS Cliente_Nombre,
+        p.Estado_P,
+        v.Metodo_Pago,
+        v.Lugar_Emision,
+        v.IGV,
+        v.Total,
+        v.Monto_Recibido,
+        v.Vuelto,
+        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+      FROM Ventas v
+      INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      ${whereClause}
+      GROUP BY 
+        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
+        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
+        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
+      ORDER BY v.Fecha_Registro DESC
+    `;
+
+    const request = pool.request();
+    
+    if (whereClause) {
+      request.input("fechaInicio", sql.DateTime, fechaInicio);
+      request.input("fechaFin", sql.DateTime, fechaFin);
+    }
+
+    const result = await request.query(sqlQuery);
+
+    const ventas = (result.recordset || []).map(r => ({
+      ID_Venta: r.ID_Venta,
+      ID_Pedido: r.ID_Pedido,
+      Tipo_Venta: r.Tipo_Venta,
+      Fecha_Registro: r.Fecha_Registro,
+      Cliente_Nombre: r.Cliente_Nombre,
+      Estado_Pedido: r.Estado_P,
+      Metodo_Pago: r.Metodo_Pago,
+      Lugar_Emision: r.Lugar_Emision,
+      IGV: r.IGV,
+      Total: r.Total,
+      Monto_Recibido: r.Monto_Recibido,
+      Vuelto: r.Vuelto,
+      Detalles_Pedido: r.Detalles_Pedido || ""
+    }));
+
+    // Calcular estadísticas del período
+    const estadisticas = {
+      periodo: periodo.toLowerCase(),
+      fechaConsulta: fecha || 'actual',
+      totalVentas: ventas.length,
+      totalIngresos: ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0),
+      promedioVenta: ventas.length > 0 ? 
+        ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0) / ventas.length : 0,
+      fechaInicio: fechaInicio.toISOString(),
+      fechaFin: fechaFin.toISOString()
+    };
+
+    res.status(200).json({
+      ventas,
+      estadisticas
+    });
+
+  } catch (err) {
+    console.error("getVentasPorPeriodo error:", err);
+    res.status(500).json({ error: "Error al obtener las ventas por período" });
+  }
+};
+
+// ==============================
+// 🔹 Estadísticas de ventas (resumen general)
+// ==============================
+exports.getEstadisticasVentas = async (req, res) => {
+  try {
+    const pool = await getConnection();
+    
+    // Estadísticas del día
+    const hoy = await pool.request().query(`
+      SELECT 
+        COUNT(*) as totalVentasHoy,
+        COALESCE(SUM(Total), 0) as ingresosHoy
+      FROM Ventas 
+      WHERE CAST(Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+    `);
+
+    // Estadísticas de la semana
+    const semana = await pool.request().query(`
+      SELECT 
+        COUNT(*) as totalVentasSemana,
+        COALESCE(SUM(Total), 0) as ingresosSemana
+      FROM Ventas 
+      WHERE Fecha_Registro >= DATEADD(day, 1-DATEPART(weekday, GETDATE()), CAST(GETDATE() AS DATE))
+        AND Fecha_Registro < DATEADD(day, 8-DATEPART(weekday, GETDATE()), CAST(GETDATE() AS DATE))
+    `);
+
+    // Estadísticas del mes
+    const mes = await pool.request().query(`
+      SELECT 
+        COUNT(*) as totalVentasMes,
+        COALESCE(SUM(Total), 0) as ingresosMes
+      FROM Ventas 
+      WHERE MONTH(Fecha_Registro) = MONTH(GETDATE()) 
+        AND YEAR(Fecha_Registro) = YEAR(GETDATE())
+    `);
+
+    // Métodos de pago más usados
+    const metodosPago = await pool.request().query(`
+      SELECT 
+        Metodo_Pago,
+        COUNT(*) as cantidad,
+        SUM(Total) as total
+      FROM Ventas
+      WHERE CAST(Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+      GROUP BY Metodo_Pago
+      ORDER BY cantidad DESC
+    `);
+
+    res.status(200).json({
+      estadisticas: {
+        hoy: {
+          totalVentas: hoy.recordset[0]?.totalVentasHoy || 0,
+          ingresos: Number(hoy.recordset[0]?.ingresosHoy || 0)
+        },
+        semana: {
+          totalVentas: semana.recordset[0]?.totalVentasSemana || 0,
+          ingresos: Number(semana.recordset[0]?.ingresosSemana || 0)
+        },
+        mes: {
+          totalVentas: mes.recordset[0]?.totalVentasMes || 0,
+          ingresos: Number(mes.recordset[0]?.ingresosMes || 0)
+        }
+      },
+      metodosPago: metodosPago.recordset.map(mp => ({
+        metodo: mp.Metodo_Pago,
+        cantidad: mp.cantidad,
+        total: Number(mp.total || 0)
+      }))
+    });
+
+  } catch (err) {
+    console.error("getEstadisticasVentas error:", err);
+    res.status(500).json({ error: "Error al obtener las estadísticas de ventas" });
+  }
+};
