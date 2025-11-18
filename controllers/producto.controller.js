@@ -49,7 +49,30 @@ function mapToProducto(row = {}) {
   };
 }
 
+async function actualizarEstadoProducto(pool, idProducto) {
+  try {
+    const result = await pool.request()
+      .input("ID_Producto", sql.Int, idProducto)
+      .query("SELECT Cantidad_Disponible FROM Producto WHERE ID_Producto = @ID_Producto");
 
+    if (!result.recordset.length) return;
+
+    const cantidad = Number(result.recordset[0].Cantidad_Disponible ?? 0);
+    const nuevoEstado = cantidad <= 0 ? "I" : "A";
+
+    // Actualizar solo si es diferente al actual
+    await pool.request()
+      .input("ID_Producto", sql.Int, idProducto)
+      .input("Estado", sql.Char(1), nuevoEstado)
+      .query(`
+        UPDATE Producto
+        SET Estado = @Estado
+        WHERE ID_Producto = @ID_Producto AND Estado != @Estado
+      `);
+  } catch (err) {
+    console.error(`Error actualizando estado del producto ${idProducto}:`, err);
+  }
+}
 // ============================== 
 // 📘 Obtener todos los productos CON SUS TAMAÑOS
 // ============================== 
@@ -62,7 +85,17 @@ exports.getProductos = async (_req, res) => {
       .request()
       .query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
 
-    const productos = resultProductos.recordset.map(mapToProducto);
+    let productos = resultProductos.recordset.map(mapToProducto);
+
+    // Actualizar estado de cada producto según cantidad_disponible
+    for (const producto of productos) {
+      await actualizarEstadoProducto(pool, producto.ID_Producto);
+    }
+
+    // Reobtener productos actualizados con estado corregido
+    const resultProductosActualizado = await pool.request()
+      .query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
+    productos = resultProductosActualizado.recordset.map(mapToProducto);
 
     // Obtener todos los tamaños de todos los productos
     const resultTamanos = await pool
@@ -78,7 +111,7 @@ exports.getProductos = async (_req, res) => {
           t.Tamano as nombre_tamano
         FROM Producto_Tamano pt
         INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-        WHERE pt.Estado = 'A'  -- ← Agregar este filtro
+        WHERE pt.Estado = 'A'
         ORDER BY pt.ID_Producto, t.ID_Tamano
       `);
 
@@ -103,6 +136,7 @@ exports.getProductos = async (_req, res) => {
   }
 };
 
+
 // ============================== 
 // 📘 Obtener un producto por ID CON SUS TAMAÑOS
 // ============================== 
@@ -110,8 +144,11 @@ exports.getProductoById = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
-    
-    // Obtener el producto
+
+    // Actualizar estado del producto según cantidad_disponible
+    await actualizarEstadoProducto(pool, id);
+
+    // Obtener el producto actualizado
     const resultProducto = await pool
       .request()
       .input("id", sql.Int, id)
@@ -138,15 +175,12 @@ exports.getProductoById = async (req, res) => {
           t.Tamano as nombre_tamano
         FROM Producto_Tamano pt
         INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-        WHERE pt.ID_Producto = @id AND pt.Estado = 'A'  -- ← Agregar este filtro
+        WHERE pt.ID_Producto = @id AND pt.Estado = 'A'
         ORDER BY t.ID_Tamano
       `);
 
-
     // Agregar los tamaños al producto
     producto.tamanos = resultTamanos.recordset || [];
-
-    console.log('Producto con tamaños:', producto);
 
     return res.status(200).json(producto);
   } catch (err) {

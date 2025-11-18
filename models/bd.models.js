@@ -193,6 +193,7 @@ const PedidoDetalle = {
   ID_Pedido_D: 0,
   ID_Pedido: 0,
   ID_Producto_T: 0,
+  ID_Combo: 0,
   Cantidad: 1,
   PrecioTotal: 0.0
 };
