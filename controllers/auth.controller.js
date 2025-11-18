@@ -44,7 +44,7 @@ exports.login = async (req, res) => {
         rol: user.Roll,
       },
       process.env.JWT_SECRET,
-      { expiresIn: "1d" } // Expira en 1 día
+      { expiresIn: "5h" } // Expira en 5 horas
     );
 
     // Respuesta al cliente

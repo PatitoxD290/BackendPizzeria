@@ -121,7 +121,7 @@ const StockMovimiento = {
   ID_Stock_M: 0,
   ID_Stock: 0,
   Tipo_Mov: "Entrada", // Entrada | Salida | Ajuste
-  Motivo: "",
+  Motivo: null, // Cambiado: ahora puede ser null (opcional)
   Cantidad: 0,
   Stock_ACT: 0,
   Usuario_ID: null,

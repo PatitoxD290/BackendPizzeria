@@ -36,7 +36,7 @@ function mapToMovimientoStock(row = {}) {
     ID_Stock_M: 0,
     ID_Stock: 0,
     Tipo_Mov: "Entrada",
-    Motivo: "",
+    Motivo: null, // Cambiado a null por defecto
     Cantidad: 0,
     Stock_ACT: 0,
     Usuario_ID: null,
@@ -49,7 +49,7 @@ function mapToMovimientoStock(row = {}) {
     ID_Stock_M: row.ID_Stock_M ?? template.ID_Stock_M,
     ID_Stock: row.ID_Stock ?? template.ID_Stock,
     Tipo_Mov: row.Tipo_Mov ?? template.Tipo_Mov,
-    Motivo: row.Motivo ?? template.Motivo,
+    Motivo: row.Motivo ?? template.Motivo, // Ahora puede ser null
     Cantidad: row.Cantidad ?? template.Cantidad,
     Stock_ACT: row.Stock_ACT ?? template.Stock_ACT,
     Usuario_ID: row.Usuario_ID ?? template.Usuario_ID,
@@ -57,7 +57,6 @@ function mapToMovimientoStock(row = {}) {
     Estado: row.Estado ?? template.Estado
   };
 }
-
 // ==============================
 // 📘 Obtener todos los registros de stock (activos)
 // ==============================
@@ -259,9 +258,9 @@ exports.createMovimientoStock = async (req, res) => {
   const {
     ID_Stock,
     Tipo_Mov, // 'Entrada' | 'Salida' | 'Ajuste'
-    Motivo,
-    Cantidad,
-    Usuario_ID
+    Motivo, // Ahora es opcional
+    Cantidad
+    // Usuario_ID ya no viene del body, viene del token
   } = req.body;
 
   try {
@@ -270,6 +269,11 @@ exports.createMovimientoStock = async (req, res) => {
         error: "Faltan campos obligatorios: ID_Stock, Tipo_Mov o Cantidad"
       });
     }
+
+    // Obtener el usuario del token (middleware debería haberlo agregado)
+    const Usuario_ID = req.user?.ID_Usuario || null;
+    console.log('Usuario del token:', req.user);
+    console.log('Usuario_ID para movimiento:', Usuario_ID);
 
     const pool = await getConnection();
     const transaction = new sql.Transaction(pool);
@@ -296,8 +300,6 @@ exports.createMovimientoStock = async (req, res) => {
         nuevoStock = actual - Number(Cantidad);
         if (nuevoStock < 0) nuevoStock = 0;
       } else if (tipoNorm === "ajuste") {
-        // Para ajuste interpretamos 'Cantidad' como el nuevo stock absoluto OR como delta?
-        // Aquí lo tratamos como delta (puedes cambiar si prefieres establecer stock exacto).
         nuevoStock = actual + Number(Cantidad);
         if (nuevoStock < 0) nuevoStock = 0;
       } else {
@@ -305,15 +307,15 @@ exports.createMovimientoStock = async (req, res) => {
         return res.status(400).json({ error: "Tipo_Mov inválido. Use 'Entrada', 'Salida' o 'Ajuste'." });
       }
 
-      // Insert movimiento
+      // Insert movimiento - Usuario_ID ahora viene del token
       const reqInsMov = new sql.Request(transaction);
       await reqInsMov
         .input("ID_Stock", sql.Int, ID_Stock)
         .input("Tipo_Mov", sql.VarChar(50), Tipo_Mov)
-        .input("Motivo", sql.VarChar(100), Motivo || "")
+        .input("Motivo", sql.VarChar(100), Motivo || null)
         .input("Cantidad", sql.Int, Cantidad)
         .input("Stock_ACT", sql.Int, nuevoStock)
-        .input("Usuario_ID", sql.Int, Usuario_ID || null)
+        .input("Usuario_ID", sql.Int, Usuario_ID) // Del token, no del body
         .input("Fecha_Mov", sql.DateTime, new Date())
         .query(`
           INSERT INTO Stock_Movimiento (
@@ -323,14 +325,18 @@ exports.createMovimientoStock = async (req, res) => {
           )
         `);
 
-      // Actualizar Stock.cantidad_recibida (Cantidad_Recibida)
+      // Actualizar Stock.cantidad_recibida
       await new sql.Request(transaction)
         .input("nuevo", sql.Int, nuevoStock)
         .input("ID_Stock", sql.Int, ID_Stock)
         .query("UPDATE Stock SET Cantidad_Recibida = @nuevo WHERE ID_Stock = @ID_Stock");
 
       await transaction.commit();
-      return res.status(201).json({ message: "Movimiento registrado y stock actualizado correctamente", Stock_ACT: nuevoStock });
+      return res.status(201).json({ 
+        message: "Movimiento registrado y stock actualizado correctamente", 
+        Stock_ACT: nuevoStock,
+        Usuario_ID: Usuario_ID // Devolver el ID del usuario que realizó el movimiento
+      });
     } catch (err) {
       await transaction.rollback();
       console.error("createMovimientoStock transaction error:", err);
@@ -343,34 +349,77 @@ exports.createMovimientoStock = async (req, res) => {
 };
 
 // ==============================
-// 📙 Anular (marcar como inactivo) un movimiento de stock
+// 📙 Actualizar movimiento de stock (ahora permite actualizar datos incluyendo motivo opcional)
 // ==============================
 exports.updateMovimientoStock = async (req, res) => {
   const { id } = req.params;
+  const {
+    Tipo_Mov,
+    Motivo, // Ahora opcional
+    Cantidad
+    // Usuario_ID ya no viene del body, viene del token
+  } = req.body;
 
   try {
     const pool = await getConnection();
     
     // Verificar si existe el movimiento
-    const check = await pool.request().input("id", sql.Int, id).query("SELECT ID_Stock_M FROM Stock_Movimiento WHERE ID_Stock_M = @id");
+    const check = await pool.request()
+      .input("id", sql.Int, id)
+      .query("SELECT ID_Stock_M FROM Stock_Movimiento WHERE ID_Stock_M = @id");
+    
     if (!check.recordset.length) {
       return res.status(404).json({ error: "Movimiento no encontrado" });
     }
 
-    // Actualizar estado si la columna existe
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query(`
-        IF COL_LENGTH('Stock_Movimiento','Estado') IS NOT NULL
-          UPDATE Stock_Movimiento SET Estado = 'I' WHERE ID_Stock_M = @id
-        ELSE
-          SELECT 1 as result
-      `);
+    // Obtener el usuario del token
+    const Usuario_ID = req.user?.ID_Usuario || null;
 
-    return res.status(200).json({ message: "Movimiento de stock anulado correctamente" });
+    // Construir la consulta UPDATE dinámicamente
+    let updateFields = [];
+    let request = pool.request();
+    
+    request.input("id", sql.Int, id);
+
+    if (Tipo_Mov !== undefined) {
+      updateFields.push("Tipo_Mov = @Tipo_Mov");
+      request.input("Tipo_Mov", sql.VarChar(50), Tipo_Mov);
+    }
+
+    if (Motivo !== undefined) {
+      updateFields.push("Motivo = @Motivo");
+      request.input("Motivo", sql.VarChar(100), Motivo || null); // Permite null
+    }
+
+    if (Cantidad !== undefined) {
+      updateFields.push("Cantidad = @Cantidad");
+      request.input("Cantidad", sql.Int, Cantidad);
+    }
+
+    // Siempre actualizar el Usuario_ID con el usuario del token
+    updateFields.push("Usuario_ID = @Usuario_ID");
+    request.input("Usuario_ID", sql.Int, Usuario_ID);
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    }
+
+    const updateQuery = `
+      UPDATE Stock_Movimiento 
+      SET ${updateFields.join(", ")}
+      WHERE ID_Stock_M = @id
+    `;
+
+    const result = await request.query(updateQuery);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Movimiento no encontrado" });
+    }
+
+    return res.status(200).json({ message: "Movimiento de stock actualizado correctamente" });
   } catch (err) {
     console.error("updateMovimientoStock error:", err);
-    return res.status(500).json({ error: "Error al anular el movimiento de stock" });
+    return res.status(500).json({ error: "Error al actualizar el movimiento de stock" });
   }
 };
 
