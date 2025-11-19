@@ -33,6 +33,7 @@ function mapToDetallePedido(row = {}) {
     ID_Pedido_D: 0,
     ID_Pedido: 0,
     ID_Producto_T: 0,
+    ID_Combo: 0, // 🔹 AGREGADO
     Cantidad: 1,
     PrecioTotal: 0.0
   };
@@ -42,6 +43,7 @@ function mapToDetallePedido(row = {}) {
     ID_Pedido_D: row.ID_Pedido_D ?? template.ID_Pedido_D,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Producto_T: row.ID_Producto_T ?? template.ID_Producto_T,
+    ID_Combo: row.ID_Combo ?? template.ID_Combo, // 🔹 AGREGADO
     Cantidad: row.Cantidad ?? template.Cantidad,
     PrecioTotal: row.PrecioTotal ?? template.PrecioTotal
   };
@@ -139,13 +141,15 @@ exports.createPedidoConDetalle = async (req, res) => {
     Hora_Pedido,
     Estado_P,
     Notas,
-    detalles // array de { ID_Producto_T?, ID_Combo?, Cantidad }
+    detalles // array de { ID_Producto_T?, ID_Combo?, Cantidad, Precio?, Complementos? }
   } = req.body;
 
   try {
     if (!detalles || !Array.isArray(detalles) || detalles.length === 0) {
       return res.status(400).json({ error: "Debe enviar al menos un detalle." });
     }
+
+    console.log('📦 Detalles recibidos:', JSON.stringify(detalles, null, 2));
 
     // -------------------------
     // Determinar cliente
@@ -181,7 +185,7 @@ exports.createPedidoConDetalle = async (req, res) => {
 
       if (!clienteExists.recordset.length) {
         await transaction.rollback();
-        return res.status(400).json({ error: `El cliente con ID ${clienteIdFinal} no existe` }); // CORREGIDO: Faltaban backticks
+        return res.status(400).json({ error: `El cliente con ID ${clienteIdFinal} no existe` });
       }
 
       // -------------------------
@@ -215,40 +219,46 @@ exports.createPedidoConDetalle = async (req, res) => {
         return res.status(500).json({ error: "No se obtuvo el ID del pedido" });
       }
 
+      console.log(`✅ Pedido creado con ID: ${pedido_id}`);
+
       // -------------------------
       // Insertar detalles productos y combos
       // -------------------------
       let subTotalAcumulado = 0.0;
 
       for (const d of detalles) {
-        const { ID_Producto_T, ID_Combo, Cantidad } = d;
+        const { ID_Producto_T, ID_Combo, Cantidad, Precio, Complementos } = d;
 
-        if (!Cantidad || Cantidad <= 0) { // CORREGIDO: Validar cantidad positiva
+        if (!Cantidad || Cantidad <= 0) {
           await transaction.rollback();
           return res.status(400).json({ error: "Cada detalle requiere cantidad válida mayor a 0." });
         }
 
         let precioUnitario = 0;
+        let subtotalLinea = 0;
 
-        // PRODUCTO
-        if (ID_Producto_T) {
-          precioUnitario = await calcularPrecioUnitario(transaction, ID_Producto_T);
+        // 🔹 USAR PRECIO ENVIADO DESDE FRONTEND SI ESTÁ DISPONIBLE
+        if (Precio !== undefined && Precio !== null && Precio > 0) {
+          precioUnitario = Number(Precio);
+          console.log(`💰 Usando precio desde frontend: ${precioUnitario} para ${ID_Producto_T ? 'producto' : 'combo'}`);
+        } else {
+          // 🔹 CALCULAR PRECIO DESDE BD SOLO SI NO SE ENVÍA DESDE FRONTEND
+          if (ID_Producto_T) {
+            precioUnitario = await calcularPrecioUnitario(transaction, ID_Producto_T);
+            await descontarStock(transaction, ID_Producto_T, Cantidad);
+          } else if (ID_Combo) {
+            precioUnitario = await calcularPrecioCombo(transaction, ID_Combo);
+          } else {
+            await transaction.rollback();
+            return res.status(400).json({ error: "Debe enviar ID_Producto_T o ID_Combo." });
+          }
+          console.log(`💰 Precio calculado desde BD: ${precioUnitario}`);
+        }
 
-          // Descontar stock del producto
-          await descontarStock(transaction, ID_Producto_T, Cantidad);
-        }
-        // COMBO
-        else if (ID_Combo) { // CORREGIDO: Usar else if para evitar conflictos
-          precioUnitario = await calcularPrecioCombo(transaction, ID_Combo);
-        }
-        else {
-          await transaction.rollback();
-          return res.status(400).json({ error: "Debe enviar ID_Producto_T o ID_Combo." });
-        }
-
-        const subtotalLinea = Number((precioUnitario * Number(Cantidad)).toFixed(2));
+        subtotalLinea = Number((precioUnitario * Number(Cantidad)).toFixed(2));
         subTotalAcumulado = Number((subTotalAcumulado + subtotalLinea).toFixed(2));
 
+        // 🔹 INSERTAR EL DETALLE PRINCIPAL (COMBO O PRODUCTO)
         const reqDet = new sql.Request(transaction);
         await reqDet
           .input("ID_Pedido", sql.Int, pedido_id)
@@ -265,6 +275,55 @@ exports.createPedidoConDetalle = async (req, res) => {
               @Cantidad, @PrecioTotal
             )
           `);
+
+        console.log(`📦 Detalle principal guardado: ${ID_Producto_T ? 'Producto' : 'Combo'} - Precio: ${precioUnitario}, Subtotal: ${subtotalLinea}`);
+
+        // 🔹 SI ES UN COMBO CON COMPLEMENTOS, PROCESAR LOS COMPLEMENTOS
+        if (ID_Combo && Complementos && Array.isArray(Complementos) && Complementos.length > 0) {
+          console.log(`🔄 Procesando ${Complementos.length} complementos para combo ${ID_Combo}`);
+          
+          for (const complemento of Complementos) {
+            const { ID_Producto_T: compID_Producto_T, Precio: compPrecio } = complemento;
+            
+            if (compID_Producto_T) {
+              let compPrecioUnitario = compPrecio || 0;
+              
+              // Si no viene precio del frontend, calcularlo desde BD
+              if (!compPrecio || compPrecio <= 0) {
+                try {
+                  compPrecioUnitario = await calcularPrecioUnitario(transaction, compID_Producto_T);
+                } catch (error) {
+                  console.warn(`⚠️ No se pudo obtener precio del complemento ${compID_Producto_T}:`, error);
+                  compPrecioUnitario = 0;
+                }
+              }
+
+              const compSubtotal = Number(compPrecioUnitario.toFixed(2));
+              
+              // 🔹 INSERTAR COMPLEMENTO COMO DETALLE ADICIONAL
+              const reqComp = new sql.Request(transaction);
+              await reqComp
+                .input("ID_Pedido", sql.Int, pedido_id)
+                .input("ID_Producto_T", sql.Int, compID_Producto_T)
+                .input("ID_Combo", sql.Int, ID_Combo) // 🔹 ASOCIAR AL MISMO COMBO
+                .input("Cantidad", sql.Int, 1) // Los complementos siempre son cantidad 1
+                .input("PrecioTotal", sql.Decimal(10, 2), compSubtotal)
+                .query(`
+                  INSERT INTO Pedido_Detalle (
+                    ID_Pedido, ID_Producto_T, ID_Combo,
+                    Cantidad, PrecioTotal
+                  ) VALUES (
+                    @ID_Pedido, @ID_Producto_T, @ID_Combo,
+                    @Cantidad, @PrecioTotal
+                  )
+                `);
+
+              subTotalAcumulado = Number((subTotalAcumulado + compSubtotal).toFixed(2));
+              
+              console.log(`🍹 Complemento guardado: Producto ${compID_Producto_T} - Precio: ${compPrecioUnitario}, Subtotal: ${compSubtotal}`);
+            }
+          }
+        }
       }
 
       // -------------------------
@@ -273,7 +332,7 @@ exports.createPedidoConDetalle = async (req, res) => {
       await new sql.Request(transaction)
         .input("SubTotal", sql.Decimal(10, 2), subTotalAcumulado)
         .input("ID_Pedido", sql.Int, pedido_id)
-        .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`); // CORREGIDO: Faltaban backticks
+        .query(`UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido`);
 
       await transaction.commit();
 
@@ -287,7 +346,7 @@ exports.createPedidoConDetalle = async (req, res) => {
       try {
         await transaction.rollback();
       } catch (rollbackError) {
-        console.error("Error durante rollback:", rollbackError); // CORREGIDO: Manejar error de rollback
+        console.error("Error durante rollback:", rollbackError);
       }
 
       console.error("createPedidoConDetalle transaction error:", err);
@@ -296,7 +355,7 @@ exports.createPedidoConDetalle = async (req, res) => {
 
   } catch (err) {
     console.error("createPedidoConDetalle error:", err);
-    return res.status(500).json({ error: "Error al registrar el pedido" }); // CORREGIDO: Caracter invisible eliminado
+    return res.status(500).json({ error: "Error al registrar el pedido" });
   }
 };
 
@@ -325,12 +384,16 @@ exports.getDetallesConNotas = async (req, res) => {
       .query(`
         SELECT 
           d.Cantidad,
+          -- Información de producto
           p.Nombre AS nombre_producto,
-          t.Tamano AS nombre_tamano
+          t.Tamano AS nombre_tamano,
+          -- Información de combo
+          c.Nombre AS nombre_combo
         FROM Pedido_Detalle d
-        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
-        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        LEFT JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        LEFT JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        LEFT JOIN Combos c ON d.ID_Combo = c.ID_Combo
         WHERE d.ID_Pedido = @ID_Pedido
       `);
 
@@ -339,7 +402,14 @@ exports.getDetallesConNotas = async (req, res) => {
     }
 
     const detallesTexto = result.recordset
-      .map(d => `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`)
+      .map(d => {
+        if (d.nombre_producto) {
+          return `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`;
+        } else if (d.nombre_combo) {
+          return `${d.nombre_combo} (Combo) x ${d.Cantidad}`;
+        }
+        return `Item x ${d.Cantidad}`;
+      })
       .join(", ");
 
     return res.status(200).json({ detalle: detallesTexto });
@@ -529,6 +599,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
     return res.status(500).json({ error: "Error al actualizar el pedido" });
   }
 };
+
 // Obtener solo los detalles
 exports.getPedidoDetalles = async (req, res) => {
   const { id } = req.params;
@@ -541,23 +612,42 @@ exports.getPedidoDetalles = async (req, res) => {
         SELECT 
           d.ID_Pedido_D, 
           d.ID_Producto_T, 
+          d.ID_Combo, -- 🔹 AGREGADO
           d.Cantidad, 
           d.PrecioTotal,
+          -- Información de producto (si aplica)
           p.Nombre AS nombre_producto,
           t.Tamano AS nombre_tamano,
-          cp.Nombre AS nombre_categoria
+          cp.Nombre AS nombre_categoria,
+          -- Información de combo (si aplica)
+          c.Nombre AS nombre_combo,
+          c.Descripcion AS descripcion_combo
         FROM Pedido_Detalle d
-        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
-        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        -- LEFT JOIN para productos (puede ser null si es combo)
+        LEFT JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        LEFT JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
+        -- LEFT JOIN para combos (puede ser null si es producto)
+        LEFT JOIN Combos c ON d.ID_Combo = c.ID_Combo
         WHERE d.ID_Pedido = @ID_Pedido
+        ORDER BY d.ID_Pedido_D
       `);
 
     if (!result.recordset.length)
       return res.status(404).json({ error: "No hay detalles para este pedido" });
 
-    return res.status(200).json(result.recordset);
+    // Procesar los resultados para determinar tipo de item
+    const detallesProcesados = result.recordset.map(detalle => ({
+      ...detalle,
+      tipo: detalle.ID_Producto_T ? 'producto' : 'combo',
+      nombre: detalle.ID_Producto_T ? detalle.nombre_producto : detalle.nombre_combo,
+      descripcion: detalle.ID_Producto_T ? 
+        `${detalle.nombre_producto} (${detalle.nombre_tamano})` : 
+        detalle.descripcion_combo
+    }));
+
+    return res.status(200).json(detallesProcesados);
   } catch (err) {
     console.error("❌ getPedidoDetalles error:", err.message);
     return res.status(500).json({ error: "Error al obtener los detalles" });
@@ -583,19 +673,38 @@ exports.getPedidoById = async (req, res) => {
       .input("ID_Pedido", sql.Int, id)
       .query(`
         SELECT
-          d.ID_Pedido_D, d.ID_Pedido, d.ID_Producto_T, d.Cantidad, d.PrecioTotal,
+          d.ID_Pedido_D, 
+          d.ID_Pedido, 
+          d.ID_Producto_T, 
+          d.ID_Combo, -- 🔹 AGREGADO
+          d.Cantidad, 
+          d.PrecioTotal,
+          -- Información de producto
           p.Nombre AS nombre_producto,
-          t.Tamano AS nombre_tamano
+          t.Tamano AS nombre_tamano,
+          -- Información de combo
+          c.Nombre AS nombre_combo
         FROM Pedido_Detalle d
-        INNER JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
-        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        LEFT JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
+        LEFT JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        LEFT JOIN Combos c ON d.ID_Combo = c.ID_Combo
         WHERE d.ID_Pedido = @ID_Pedido
+        ORDER BY d.ID_Pedido_D
       `);
+
+    // Procesar detalles para agregar información de tipo
+    const detallesProcesados = detallesRes.recordset.map(detalle => ({
+      ...detalle,
+      tipo: detalle.ID_Producto_T ? 'producto' : 'combo',
+      nombre: detalle.ID_Producto_T ? 
+        `${detalle.nombre_producto} (${detalle.nombre_tamano})` : 
+        detalle.nombre_combo
+    }));
 
     return res.status(200).json({
       ...pedido,
-      detalles: detallesRes.recordset || []
+      detalles: detallesProcesados
     });
   } catch (err) {
     console.error("❌ getPedidoById error:", err.message);
@@ -704,25 +813,36 @@ exports.getPedidosHoy = async (_req, res) => {
     const pedidosConDetalles = await Promise.all(
       pedidos.map(async (pedido) => {
         const detallesQuery = `
-          SELECT 
-            pd.Cantidad,
-            pr.Nombre AS nombre_producto,
-            t.Tamano AS nombre_tamano
-          FROM Pedido_Detalle pd
-          INNER JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
-          INNER JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
-          INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-          WHERE pd.ID_Pedido = @ID_Pedido
-          ORDER BY pd.ID_Pedido_D
-        `;
+  SELECT 
+    pd.Cantidad,
+    -- Información de producto
+    pr.Nombre AS nombre_producto,
+    t.Tamano AS nombre_tamano,
+    -- Información de combo
+    c.Nombre AS nombre_combo
+  FROM Pedido_Detalle pd
+  LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+  LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+  LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+  LEFT JOIN Combos c ON pd.ID_Combo = c.ID_Combo
+  WHERE pd.ID_Pedido = @ID_Pedido
+  ORDER BY pd.ID_Pedido_D
+`;
 
         const detallesResult = await pool.request()
           .input("ID_Pedido", sql.Int, pedido.ID_Pedido)
           .query(detallesQuery);
 
         const detallesTexto = detallesResult.recordset
-          .map(d => `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`)
-          .join(", ");
+  .map(d => {
+    if (d.nombre_producto) {
+      return `${d.nombre_producto} (${d.nombre_tamano}) x ${d.Cantidad}`;
+    } else if (d.nombre_combo) {
+      return `${d.nombre_combo} (Combo) x ${d.Cantidad}`;
+    }
+    return `Item x ${d.Cantidad}`;
+  })
+  .join(", ");
 
         return {
           ID_Pedido: pedido.ID_Pedido,

@@ -96,7 +96,7 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar 
 }
 
 // ==============================
-// 🔹 Listar ventas enriquecido - ACTUALIZADO con nuevos campos
+// 🔹 Listar ventas enriquecido - ACTUALIZADO con ID_Combo
 // ==============================
 exports.getVentas = async (_req, res) => {
   try {
@@ -115,14 +115,26 @@ exports.getVentas = async (_req, res) => {
         v.Total,
         v.Monto_Recibido,
         v.Vuelto,
-        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
+        STRING_AGG(
+          CASE 
+            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
+              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
+            ELSE 
+              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
+          END, 
+          ', '
+        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
       LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
       LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
       LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
       LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      -- 🔹 NUEVO: LEFT JOIN para combos
+      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
       GROUP BY 
         v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
         c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
@@ -287,7 +299,7 @@ exports.updateVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Datos de boleta/factura - ACTUALIZADO con nuevos campos
+// 🔹 Datos de boleta/factura - ACTUALIZADO con ID_Combo
 // ==============================
 exports.datosBoletaVenta = async (req, res) => {
   try {
@@ -309,23 +321,49 @@ exports.datosBoletaVenta = async (req, res) => {
     // Usar la función calcularMontos actualizada (IGV será 0)
     const montos = await calcularMontos(pool, venta.ID_Pedido);
 
+    // 🔹 ACTUALIZADO: Consulta que incluye ID_Combo
     const detallesRes = await pool.request()
       .input("ID_Pedido", sql.Int, venta.ID_Pedido)
       .query(`
         SELECT 
           pd.ID_Pedido_D, 
           pd.ID_Producto_T, 
+          pd.ID_Combo, -- 🔹 NUEVO: Incluir ID_Combo
           pd.Cantidad, 
           pd.PrecioTotal,
+          -- Información de producto (si aplica)
           pr.Nombre AS Producto_Nombre,
-          t.Tamano AS Tamano_Nombre
+          t.Tamano AS Tamano_Nombre,
+          -- Información de combo (si aplica)
+          cm.Nombre AS Combo_Nombre,
+          cm.Descripcion AS Combo_Descripcion
         FROM Pedido_Detalle pd
+        -- 🔹 ACTUALIZADO: LEFT JOIN para productos
         LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
         LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
         LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        -- 🔹 NUEVO: LEFT JOIN para combos
+        LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
         WHERE pd.ID_Pedido = @ID_Pedido
         ORDER BY pd.ID_Pedido_D
       `);
+
+    // 🔹 ACTUALIZADO: Procesar detalles para determinar tipo
+    const detallesProcesados = detallesRes.recordset.map(d => {
+      const esCombo = d.ID_Combo && d.ID_Combo > 0;
+      
+      return {
+        ID_Pedido_D: d.ID_Pedido_D,
+        ID_Producto_T: d.ID_Producto_T,
+        ID_Combo: d.ID_Combo,
+        Producto_Nombre: esCombo ? d.Combo_Nombre : d.Producto_Nombre,
+        Tamano_Nombre: esCombo ? 'Combo' : (d.Tamano_Nombre || 'Único'),
+        Descripcion: esCombo ? d.Combo_Descripcion : null,
+        Cantidad: d.Cantidad,
+        PrecioTotal: d.PrecioTotal,
+        Tipo: esCombo ? 'combo' : 'producto'
+      };
+    });
 
     res.status(200).json({
       exito: true,
@@ -352,14 +390,7 @@ exports.datosBoletaVenta = async (req, res) => {
         Tipo_Desc: montos.cuponAplicado.Tipo_Desc,
         Valor_Desc: montos.cuponAplicado.Valor_Desc
       } : null,
-      detalles: detallesRes.recordset.map(d => ({
-        ID_Pedido_D: d.ID_Pedido_D,
-        ID_Producto_T: d.ID_Producto_T,
-        Producto_Nombre: d.Producto_Nombre,
-        Tamano_Nombre: d.Tamano_Nombre,
-        Cantidad: d.Cantidad,
-        PrecioTotal: d.PrecioTotal
-      }))
+      detalles: detallesProcesados
     });
 
   } catch (err) {
@@ -369,7 +400,7 @@ exports.datosBoletaVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Detalles de Venta - ACTUALIZADO con nuevos campos
+// 🔹 Detalles de Venta - ACTUALIZADO con ID_Combo
 // ==============================
 exports.detallesVenta = async (req, res) => {
   try {
@@ -384,15 +415,24 @@ exports.detallesVenta = async (req, res) => {
           v.IGV, v.Total, v.Monto_Recibido, v.Vuelto, v.Fecha_Registro,
           p.ID_Cliente, p.ID_Usuario, p.SubTotal, p.Notas,
           
-          pd.ID_Pedido_D, pd.ID_Producto_T, pd.Cantidad, pd.PrecioTotal,
+          pd.ID_Pedido_D, pd.ID_Producto_T, pd.ID_Combo, pd.Cantidad, pd.PrecioTotal,
           
           c.Nombre AS Nombre_Cliente,
           CASE WHEN LEN(c.DNI) > 8 THEN NULL ELSE c.Apellido END AS Apellido_Cliente,
           c.DNI,
           
           u.Perfil AS Perfil_Usuario,
-          pr.Nombre AS Nombre_Producto,
-          t.Tamano AS Tamano_Nombre
+          -- 🔹 ACTUALIZADO: Información de producto Y combo
+          CASE 
+            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN cm.Nombre
+            ELSE pr.Nombre 
+          END AS Nombre_Producto,
+          CASE 
+            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 'Combo'
+            ELSE t.Tamano 
+          END AS Tamano_Nombre,
+          -- 🔹 NUEVO: Información adicional del combo
+          cm.Descripcion AS Combo_Descripcion
       FROM
           ventas v
       JOIN
@@ -403,12 +443,16 @@ exports.detallesVenta = async (req, res) => {
           Cliente c ON p.ID_Cliente = c.ID_Cliente
       JOIN
           Usuario u ON p.ID_Usuario = u.ID_Usuario
+      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
       LEFT JOIN
           Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
       LEFT JOIN
           Producto pr ON pt.ID_Producto = pr.ID_Producto
       LEFT JOIN
           Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      -- 🔹 NUEVO: LEFT JOIN para combos
+      LEFT JOIN
+          Combos cm ON pd.ID_Combo = cm.ID_Combo
       WHERE
           v.ID_Venta = @id
       ORDER BY
@@ -452,15 +496,22 @@ exports.detallesVenta = async (req, res) => {
       Perfil: firstRow.Perfil_Usuario
     };
 
-    // Mapeamos TODAS las filas para crear el array de detalles
-    const detallesPedido = result.recordset.map(row => ({
-      ID_Pedido_D: row.ID_Pedido_D,
-      ID_Producto_T: row.ID_Producto_T,
-      Producto_Nombre: row.Nombre_Producto,
-      Tamano_Nombre: row.Tamano_Nombre || "Único",
-      Cantidad: row.Cantidad,
-      PrecioTotal: row.PrecioTotal
-    }));
+    // 🔹 ACTUALIZADO: Mapear detalles incluyendo información de combos
+    const detallesPedido = result.recordset.map(row => {
+      const esCombo = row.ID_Combo && row.ID_Combo > 0;
+      
+      return {
+        ID_Pedido_D: row.ID_Pedido_D,
+        ID_Producto_T: row.ID_Producto_T,
+        ID_Combo: row.ID_Combo,
+        Producto_Nombre: row.Nombre_Producto,
+        Tamano_Nombre: row.Tamano_Nombre,
+        Descripcion: esCombo ? row.Combo_Descripcion : null,
+        Cantidad: row.Cantidad,
+        PrecioTotal: row.PrecioTotal,
+        Tipo: esCombo ? 'combo' : 'producto'
+      };
+    });
 
     // Enviamos la respuesta estructurada
     res.status(200).json({
@@ -478,7 +529,7 @@ exports.detallesVenta = async (req, res) => {
 };
 
 // ==============================
-// 🔹 Ventas del día de hoy
+// 🔹 Ventas del día de hoy - ACTUALIZADO con ID_Combo
 // ==============================
 exports.getVentasHoy = async (_req, res) => {
   try {
@@ -498,14 +549,26 @@ exports.getVentasHoy = async (_req, res) => {
         v.Total,
         v.Monto_Recibido,
         v.Vuelto,
-        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
+        STRING_AGG(
+          CASE 
+            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
+              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
+            ELSE 
+              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
+          END, 
+          ', '
+        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
       LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
       LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
       LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
       LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      -- 🔹 NUEVO: LEFT JOIN para combos
+      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
       WHERE CAST(v.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
       GROUP BY 
         v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
@@ -553,7 +616,7 @@ exports.getVentasHoy = async (_req, res) => {
 };
 
 // ==============================
-// 🔹 Ventas por período (día, semana, mes, año)
+// 🔹 Ventas por período (día, semana, mes, año) - ACTUALIZADO con ID_Combo
 // ==============================
 exports.getVentasPorPeriodo = async (req, res) => {
   try {
@@ -636,14 +699,26 @@ exports.getVentasPorPeriodo = async (req, res) => {
         v.Total,
         v.Monto_Recibido,
         v.Vuelto,
-        STRING_AGG(CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad), ', ') WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
+        STRING_AGG(
+          CASE 
+            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
+              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
+            ELSE 
+              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
+          END, 
+          ', '
+        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
       LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
       LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
       LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
       LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      -- 🔹 NUEVO: LEFT JOIN para combos
+      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
       ${whereClause}
       GROUP BY 
         v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
