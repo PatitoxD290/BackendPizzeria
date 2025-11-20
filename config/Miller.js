@@ -88,11 +88,12 @@ const verificarPago = (req, res) => {
   try {
     console.log("🔍 Solicitud de verificación recibida");
     
-    // SIEMPRE verificar contra tu correo
+    // SIEMPRE verificar contra tu correfo
     const emailDestino = "abnerluisnovoa@gmail.com, brayantitovasqueztorrez@gmail.com";
     const { codigo } = req.body;
 
     console.log("Código recibido para verificar:", codigo);
+    console.log("Códigos activos en memoria:", codigosPago);
 
     if (!codigo) {
       return res.status(400).json({ 
@@ -104,7 +105,17 @@ const verificarPago = (req, res) => {
     const codigoGuardado = codigosPago[emailDestino];
     console.log("Código guardado para", emailDestino, ":", codigoGuardado);
     
-    if (codigoGuardado && codigoGuardado === parseInt(codigo)) {
+    // Validar que el código sea numérico
+    const codigoNumerico = parseInt(codigo);
+    if (isNaN(codigoNumerico)) {
+      console.log("❌ Código no es numérico:", codigo);
+      return res.status(400).json({ 
+        success: false,
+        message: "El código debe ser numérico" 
+      });
+    }
+    
+    if (codigoGuardado && codigoGuardado === codigoNumerico) {
       delete codigosPago[emailDestino];
       console.log("✅ Código verificado correctamente para:", emailDestino);
       return res.status(200).json({ 
@@ -113,6 +124,7 @@ const verificarPago = (req, res) => {
       });
     } else {
       console.log("❌ Código incorrecto o expirado para:", emailDestino);
+      console.log("Esperado:", codigoGuardado, "Recibido:", codigoNumerico);
       return res.status(400).json({ 
         success: false,
         message: "Código de pago incorrecto o expirado" 
