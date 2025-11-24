@@ -1,39 +1,51 @@
 const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 const path = require("path");
-const fs = require("fs");
+const fs = require("fs").promises; // ⚡ Async
+const fsSync = require("fs"); 
+
 // Carpeta de uploads
 const uploadDir = path.join(__dirname, "..", "uploads");
 
-// Función para eliminar imágenes antiguas de un producto
-function eliminarImagenesProducto(idProducto) {
-  const files = fs.readdirSync(uploadDir);
-  files.forEach((file) => {
-    if (file.startsWith(`producto_${idProducto}_`)) {
-      const filePath = path.join(uploadDir, file);
-      try {
-        fs.unlinkSync(filePath);
-        console.log(`Archivo eliminado: ${file}`);
-      } catch (err) {
-        console.error(`Error eliminando archivo ${file}:`, err);
-      }
-    }
-  });
+// Asegurar carpeta
+if (!fsSync.existsSync(uploadDir)) {
+    fsSync.mkdirSync(uploadDir, { recursive: true });
 }
+
+// ==============================
+// 🔄 Helper: Obtener URLs de imágenes
+// ==============================
+async function getImagenesProducto(idProducto) {
+    try {
+        const files = await fs.readdir(uploadDir);
+        return files
+            .filter(file => file.startsWith(`producto_${idProducto}_`))
+            .map(file => `/uploads/${file}`); 
+    } catch (err) {
+        return [];
+    }
+}
+
+// ==============================
+// 🔄 Función para eliminar imágenes (Async)
+// ==============================
+async function eliminarImagenesProducto(idProducto) {
+    try {
+        const files = await fs.readdir(uploadDir);
+        const deletePromises = files
+            .filter(file => file.startsWith(`producto_${idProducto}_`))
+            .map(file => fs.unlink(path.join(uploadDir, file)));
+        await Promise.all(deletePromises);
+    } catch (err) {
+        console.error(`Error eliminando imágenes producto ${idProducto}:`, err);
+    }
+}
+
 // ==============================
 // 🔄 Mapper: adapta una fila SQL al modelo Producto
 // ==============================
 function mapToProducto(row = {}) {
-  const template = bdModel?.Producto || {
-    ID_Producto: 0,
-    Nombre: "",
-    Descripcion: "",
-    ID_Categoria_P: 0,
-    ID_Receta: null,
-    Cantidad_Disponible: 0,
-    Estado: "A",
-    Fecha_Registro: "",
-  };
+  const template = bdModel?.Producto || {}; // Usamos el modelo como base
 
   return {
     ...template,
@@ -42,145 +54,119 @@ function mapToProducto(row = {}) {
     Descripcion: row.Descripcion ?? template.Descripcion,
     ID_Categoria_P: row.ID_Categoria_P ?? template.ID_Categoria_P,
     ID_Receta: row.ID_Receta ?? template.ID_Receta,
-    Cantidad_Disponible:
-      row.Cantidad_Disponible ?? template.Cantidad_Disponible,
+    Cantidad_Disponible: row.Cantidad_Disponible ?? template.Cantidad_Disponible,
     Estado: row.Estado ?? template.Estado,
     Fecha_Registro: row.Fecha_Registro ?? template.Fecha_Registro,
   };
 }
 
+// ==============================
+// 🔄 Helper: Actualizar estado según stock
+// ==============================
 async function actualizarEstadoProducto(pool, idProducto) {
   try {
     const result = await pool.request()
       .input("ID_Producto", sql.Int, idProducto)
-      .query("SELECT Cantidad_Disponible FROM Producto WHERE ID_Producto = @ID_Producto");
+      .query("SELECT Cantidad_Disponible, Estado FROM Producto WHERE ID_Producto = @ID_Producto");
 
     if (!result.recordset.length) return;
 
-    const cantidad = Number(result.recordset[0].Cantidad_Disponible ?? 0);
+    const prod = result.recordset[0];
+    const cantidad = Number(prod.Cantidad_Disponible ?? 0);
     const nuevoEstado = cantidad <= 0 ? "I" : "A";
 
-    // Actualizar solo si es diferente al actual
-    await pool.request()
-      .input("ID_Producto", sql.Int, idProducto)
-      .input("Estado", sql.Char(1), nuevoEstado)
-      .query(`
-        UPDATE Producto
-        SET Estado = @Estado
-        WHERE ID_Producto = @ID_Producto AND Estado != @Estado
-      `);
+    // Solo actualizar si el estado cambia y no es 'G' (Agotado manual)
+    if (prod.Estado !== nuevoEstado && prod.Estado !== 'G') {
+        await pool.request()
+        .input("ID_Producto", sql.Int, idProducto)
+        .input("Estado", sql.Char(1), nuevoEstado)
+        .query("UPDATE Producto SET Estado = @Estado WHERE ID_Producto = @ID_Producto");
+    }
   } catch (err) {
-    console.error(`Error actualizando estado del producto ${idProducto}:`, err);
+    console.error(`Error actualizando estado producto ${idProducto}:`, err);
   }
 }
+
 // ============================== 
-// 📘 Obtener todos los productos CON SUS TAMAÑOS
+// 📘 Obtener todos los productos CON SUS TAMAÑOS E IMÁGENES
 // ============================== 
 exports.getProductos = async (_req, res) => {
   try {
     const pool = await getConnection();
     
-    // Obtener todos los productos
-    const resultProductos = await pool
-      .request()
-      .query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
-
+    // 1. Obtener productos base
+    const resultProductos = await pool.request().query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
     let productos = resultProductos.recordset.map(mapToProducto);
 
-    // Actualizar estado de cada producto según cantidad_disponible
-    for (const producto of productos) {
-      await actualizarEstadoProducto(pool, producto.ID_Producto);
-    }
+    // 2. Actualizar estados (en paralelo para velocidad)
+    await Promise.all(productos.map(p => actualizarEstadoProducto(pool, p.ID_Producto)));
 
-    // Reobtener productos actualizados con estado corregido
-    const resultProductosActualizado = await pool.request()
-      .query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
-    productos = resultProductosActualizado.recordset.map(mapToProducto);
+    // 3. Re-consultar productos actualizados
+    const resultUpdate = await pool.request().query("SELECT * FROM Producto ORDER BY ID_Producto DESC");
+    productos = resultUpdate.recordset.map(mapToProducto);
 
-    // Obtener todos los tamaños de todos los productos
-    const resultTamanos = await pool
-      .request()
-      .query(`
-        SELECT 
-          pt.ID_Producto_T,
-          pt.ID_Producto,
-          pt.ID_Tamano,
-          pt.Precio,
-          pt.Estado,
-          pt.Fecha_Registro,
-          t.Tamano as nombre_tamano
+    // 4. Obtener tamaños
+    const resultTamanos = await pool.request().query(`
+        SELECT pt.ID_Producto_T, pt.ID_Producto, pt.ID_Tamano, pt.Precio, pt.Estado, 
+               t.Tamano as nombre_tamano
         FROM Producto_Tamano pt
         INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         WHERE pt.Estado = 'A'
         ORDER BY pt.ID_Producto, t.ID_Tamano
-      `);
+    `);
 
-    // Agrupar tamaños por producto
+    // 5. Mapear tamaños
     const tamanosPorProducto = {};
-    resultTamanos.recordset.forEach(tamano => {
-      if (!tamanosPorProducto[tamano.ID_Producto]) {
-        tamanosPorProducto[tamano.ID_Producto] = [];
-      }
-      tamanosPorProducto[tamano.ID_Producto].push(tamano);
+    resultTamanos.recordset.forEach(t => {
+      if (!tamanosPorProducto[t.ID_Producto]) tamanosPorProducto[t.ID_Producto] = [];
+      tamanosPorProducto[t.ID_Producto].push(t);
     });
 
-    // Agregar tamaños a cada producto
-    productos.forEach(producto => {
-      producto.tamanos = tamanosPorProducto[producto.ID_Producto] || [];
-    });
+    // 6. Unir todo (imágenes + tamaños)
+    const resultadoFinal = await Promise.all(productos.map(async (p) => {
+        const imgs = await getImagenesProducto(p.ID_Producto);
+        return {
+            ...p,
+            tamanos: tamanosPorProducto[p.ID_Producto] || [],
+            imagenes: imgs
+        };
+    }));
 
-    return res.status(200).json(productos);
+    return res.status(200).json(resultadoFinal);
   } catch (err) {
     console.error("getProductos error:", err);
     return res.status(500).json({ error: "Error al obtener los productos" });
   }
 };
 
-
 // ============================== 
-// 📘 Obtener un producto por ID CON SUS TAMAÑOS
+// 📘 Obtener un producto por ID
 // ============================== 
 exports.getProductoById = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
 
-    // Actualizar estado del producto según cantidad_disponible
     await actualizarEstadoProducto(pool, id);
 
-    // Obtener el producto actualizado
-    const resultProducto = await pool
-      .request()
-      .input("id", sql.Int, id)
+    const resultProducto = await pool.request().input("id", sql.Int, id)
       .query("SELECT * FROM Producto WHERE ID_Producto = @id");
 
-    if (!resultProducto.recordset.length) {
-      return res.status(404).json({ error: "Producto no encontrado" });
-    }
+    if (!resultProducto.recordset.length) return res.status(404).json({ error: "Producto no encontrado" });
 
-    const producto = resultProducto.recordset[0];
+    const producto = mapToProducto(resultProducto.recordset[0]);
 
-    // Obtener los tamaños del producto con sus precios
-    const resultTamanos = await pool
-      .request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT 
-          pt.ID_Producto_T,
-          pt.ID_Producto,
-          pt.ID_Tamano,
-          pt.Precio,
-          pt.Estado,
-          pt.Fecha_Registro,
-          t.Tamano as nombre_tamano
+    const resultTamanos = await pool.request().input("id", sql.Int, id).query(`
+        SELECT pt.ID_Producto_T, pt.ID_Producto, pt.ID_Tamano, pt.Precio, pt.Estado, 
+               t.Tamano as nombre_tamano
         FROM Producto_Tamano pt
         INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         WHERE pt.ID_Producto = @id AND pt.Estado = 'A'
         ORDER BY t.ID_Tamano
-      `);
+    `);
 
-    // Agregar los tamaños al producto
     producto.tamanos = resultTamanos.recordset || [];
+    producto.imagenes = await getImagenesProducto(id);
 
     return res.status(200).json(producto);
   } catch (err) {
@@ -190,39 +176,28 @@ exports.getProductoById = async (req, res) => {
 };
 
 // ============================== 
-// 📗 Crear un nuevo producto + Producto_Tamano
+// 📗 Crear Producto
 // ============================== 
 exports.createProducto = async (req, res) => {
-  const { 
-    Nombre, 
-    Descripcion, 
-    ID_Categoria_P, 
-    ID_Receta, 
-    Cantidad_Disponible, 
-    Estado
-  } = req.body;
-
-  // ⚠️ IMPORTANTE: Si viene Producto_Tamano como string, parsearlo
+  const { Nombre, Descripcion, ID_Categoria_P, ID_Receta, Cantidad_Disponible, Estado } = req.body;
   let Producto_Tamano = [];
+
   if (req.body.Producto_Tamano) {
     try {
-      Producto_Tamano = typeof req.body.Producto_Tamano === 'string' 
-        ? JSON.parse(req.body.Producto_Tamano) 
-        : req.body.Producto_Tamano;
-    } catch (err) {
-      console.error("Error parseando Producto_Tamano:", err);
-    }
+      Producto_Tamano = typeof req.body.Producto_Tamano === 'string' ? JSON.parse(req.body.Producto_Tamano) : req.body.Producto_Tamano;
+    } catch (e) { }
   }
 
-  if (!Nombre || ID_Categoria_P == null) {
-    return res.status(400).json({ error: "Faltan campos obligatorios: Nombre e ID_Categoria_P" });
-  }
+  if (!Nombre || ID_Categoria_P == null) return res.status(400).json({ error: "Faltan campos obligatorios" });
+
+  const pool = await getConnection();
+  const transaction = new sql.Transaction(pool);
 
   try {
-    const pool = await getConnection();
-    
-    // Insertar producto
-    const result = await pool.request()
+    await transaction.begin();
+
+    // 1. Insertar Producto
+    const result = await new sql.Request(transaction)
       .input("Nombre", sql.VarChar(100), Nombre)
       .input("Descripcion", sql.VarChar(8000), Descripcion || "")
       .input("ID_Categoria_P", sql.Int, Number(ID_Categoria_P))
@@ -231,238 +206,182 @@ exports.createProducto = async (req, res) => {
       .input("Estado", sql.Char(1), Estado || "A")
       .input("Fecha_Registro", sql.DateTime, new Date())
       .query(`
-        INSERT INTO Producto (
-          Nombre, Descripcion, ID_Categoria_P, ID_Receta, 
-          Cantidad_Disponible, Estado, Fecha_Registro
-        )
-        VALUES (
-          @Nombre, @Descripcion, @ID_Categoria_P, @ID_Receta, 
-          @Cantidad_Disponible, @Estado, @Fecha_Registro
-        );
-        SELECT SCOPE_IDENTITY() AS ID_Producto;
+        INSERT INTO Producto (Nombre, Descripcion, ID_Categoria_P, ID_Receta, Cantidad_Disponible, Estado, Fecha_Registro)
+        OUTPUT INSERTED.ID_Producto
+        VALUES (@Nombre, @Descripcion, @ID_Categoria_P, @ID_Receta, @Cantidad_Disponible, @Estado, @Fecha_Registro);
       `);
 
-    const idProducto = result.recordset?.[0]?.ID_Producto;
-    if (!idProducto) return res.status(500).json({ error: "No se generó ID del Producto" });
+    const idProducto = result.recordset[0].ID_Producto;
 
-    // Insertar Producto_Tamano
+    // 2. Insertar Tamaños
     for (const t of Producto_Tamano) {
-      await pool.request()
+      await new sql.Request(transaction)
         .input("ID_Producto", sql.Int, idProducto)
         .input("ID_Tamano", sql.Int, t.ID_Tamano)
         .input("Precio", sql.Decimal(10, 2), t.Precio)
         .input("Estado", sql.Char(1), "A")
         .input("Fecha_Registro", sql.DateTime, new Date())
-        .query(`
-          INSERT INTO Producto_Tamano (ID_Producto, ID_Tamano, Precio, Estado, Fecha_Registro)
-          VALUES (@ID_Producto, @ID_Tamano, @Precio, @Estado, @Fecha_Registro)
-        `);
+        .query("INSERT INTO Producto_Tamano (ID_Producto, ID_Tamano, Precio, Estado, Fecha_Registro) VALUES (@ID_Producto, @ID_Tamano, @Precio, @Estado, @Fecha_Registro)");
     }
 
-    // Manejo de imágenes
+    // 3. Guardar Imágenes (Async pero esperamos a que terminen de moverse)
     const archivosRenombrados = [];
     if (req.files && req.files.length > 0) {
-      for (let i = 0; i < req.files.length; i++) {
-        const file = req.files[i];
-        const extension = path.extname(file.originalname);
-        const nuevoNombre = `producto_${idProducto}_${i + 1}${extension}`;
-        fs.renameSync(
-          path.join(file.destination, file.filename),
-          path.join(file.destination, nuevoNombre)
-        );
-        archivosRenombrados.push(nuevoNombre);
-      }
+        const movePromises = req.files.map(async (file, i) => {
+            const ext = path.extname(file.originalname);
+            const nuevoNombre = `producto_${idProducto}_${i + 1}${ext}`;
+            await fs.rename(file.path, path.join(uploadDir, nuevoNombre));
+            archivosRenombrados.push(nuevoNombre);
+        });
+        await Promise.all(movePromises);
     }
 
+    await transaction.commit();
+
+    // 4. Respuesta final con imágenes URLs
+    const imgs = await getImagenesProducto(idProducto);
+
     return res.status(201).json({
-      message: "Producto y tamaños registrados correctamente",
+      message: "Producto creado correctamente",
       ID_Producto: idProducto,
-      archivos_subidos: archivosRenombrados.length,
-      nombres_archivos: archivosRenombrados
+      imagenes: imgs
     });
+
   } catch (err) {
+    if (transaction) await transaction.rollback();
     console.error("createProducto error:", err);
-    return res.status(500).json({ error: "Error al registrar el producto" });
+    return res.status(500).json({ error: "Error al crear producto" });
   }
 };
 
 // ============================== 
-// 📙 Actualizar un producto + Producto_Tamano
+// 📙 Actualizar Producto
 // ============================== 
 exports.updateProducto = async (req, res) => {
   const { id } = req.params;
-  const { 
-    Nombre, 
-    Descripcion, 
-    ID_Categoria_P, 
-    ID_Receta, 
-    Cantidad_Disponible, 
-    Estado 
-  } = req.body;
-
-  // ⚠️ IMPORTANTE: Si viene Producto_Tamano como string, parsearlo
+  const { Nombre, Descripcion, ID_Categoria_P, ID_Receta, Cantidad_Disponible, Estado } = req.body;
   let Producto_Tamano = [];
+
   if (req.body.Producto_Tamano) {
     try {
-      Producto_Tamano = typeof req.body.Producto_Tamano === 'string' 
-        ? JSON.parse(req.body.Producto_Tamano) 
-        : req.body.Producto_Tamano;
-    } catch (err) {
-      console.error("Error parseando Producto_Tamano:", err);
-    }
+      Producto_Tamano = typeof req.body.Producto_Tamano === 'string' ? JSON.parse(req.body.Producto_Tamano) : req.body.Producto_Tamano;
+    } catch (e) { }
   }
 
+  const pool = await getConnection();
+  const transaction = new sql.Transaction(pool);
+
   try {
-    const pool = await getConnection();
-    
-    // Iniciar una transacción
-    const transaction = new sql.Transaction(pool);
     await transaction.begin();
 
-    try {
-      // 1. Actualizar producto
-      await transaction.request()
-        .input("ID_Producto", sql.Int, id)
-        .input("Nombre", sql.VarChar(100), Nombre)
-        .input("Descripcion", sql.VarChar(8000), Descripcion || "")
-        .input("ID_Categoria_P", sql.Int, Number(ID_Categoria_P))
-        .input("ID_Receta", sql.Int, ID_Receta ? Number(ID_Receta) : null)
-        .input("Cantidad_Disponible", sql.Int, Cantidad_Disponible || 0)
-        .input("Estado", sql.Char(1), Estado || "A")
-        .query(`
-          UPDATE Producto 
-          SET Nombre=@Nombre, 
-              Descripcion=@Descripcion, 
-              ID_Categoria_P=@ID_Categoria_P, 
-              ID_Receta=@ID_Receta, 
-              Cantidad_Disponible=@Cantidad_Disponible, 
-              Estado=@Estado 
-          WHERE ID_Producto=@ID_Producto
-        `);
+    // 1. Update Producto Base
+    const request = new sql.Request(transaction);
+    request.input("ID", sql.Int, id);
+    
+    let updates = [];
+    if(Nombre) { updates.push("Nombre=@Nombre"); request.input("Nombre", sql.VarChar, Nombre); }
+    if(Descripcion !== undefined) { updates.push("Descripcion=@Desc"); request.input("Desc", sql.VarChar, Descripcion); }
+    if(ID_Categoria_P) { updates.push("ID_Categoria_P=@Cat"); request.input("Cat", sql.Int, ID_Categoria_P); }
+    if(ID_Receta !== undefined) { updates.push("ID_Receta=@Rec"); request.input("Rec", sql.Int, ID_Receta); }
+    if(Cantidad_Disponible !== undefined) { updates.push("Cantidad_Disponible=@Cant"); request.input("Cant", sql.Int, Cantidad_Disponible); }
+    if(Estado) { updates.push("Estado=@Est"); request.input("Est", sql.Char(1), Estado); }
 
-      // 2. Obtener los tamaños actuales del producto
-      const resultTamanosActuales = await transaction.request()
-        .input("ID_Producto", sql.Int, id)
-        .query("SELECT ID_Producto_T, ID_Tamano FROM Producto_Tamano WHERE ID_Producto = @ID_Producto");
-
-      const tamanosActuales = resultTamanosActuales.recordset;
-      const tamanosActualesMap = new Map(tamanosActuales.map(t => [t.ID_Tamano, t.ID_Producto_T]));
-
-      // 3. Procesar los nuevos tamaños
-      for (const t of Producto_Tamano) {
-        const idTamano = t.ID_Tamano;
-        const precio = t.Precio;
-
-        // Verificar si el tamaño ya existe para este producto
-        if (tamanosActualesMap.has(idTamano)) {
-          // Actualizar el tamaño existente
-          const idProductoT = tamanosActualesMap.get(idTamano);
-          await transaction.request()
-            .input("ID_Producto_T", sql.Int, idProductoT)
-            .input("Precio", sql.Decimal(10, 2), precio)
-            .query(`
-              UPDATE Producto_Tamano 
-              SET Precio = @Precio 
-              WHERE ID_Producto_T = @ID_Producto_T
-            `);
-          
-          // Remover de la lista de tamaños actuales
-          tamanosActualesMap.delete(idTamano);
-        } else {
-          // Insertar nuevo tamaño
-          await transaction.request()
-            .input("ID_Producto", sql.Int, id)
-            .input("ID_Tamano", sql.Int, idTamano)
-            .input("Precio", sql.Decimal(10, 2), precio)
-            .input("Estado", sql.Char(1), "A")
-            .input("Fecha_Registro", sql.DateTime, new Date())
-            .query(`
-              INSERT INTO Producto_Tamano (ID_Producto, ID_Tamano, Precio, Estado, Fecha_Registro)
-              VALUES (@ID_Producto, @ID_Tamano, @Precio, @Estado, @Fecha_Registro)
-            `);
-        }
-      }
-
-      // 4. Desactivar (no eliminar) los tamaños que ya no están en la lista
-      // Esto evita el problema de la restricción de clave foránea
-      for (const [idTamano, idProductoT] of tamanosActualesMap.entries()) {
-        await transaction.request()
-          .input("ID_Producto_T", sql.Int, idProductoT)
-          .input("Estado", sql.Char(1), "I") // Cambiar estado a Inactivo en lugar de eliminar
-          .query(`
-            UPDATE Producto_Tamano 
-            SET Estado = @Estado 
-            WHERE ID_Producto_T = @ID_Producto_T
-          `);
-      }
-
-      // 5. Manejo de imágenes
-      const archivosRenombrados = [];
-      if (req.files && req.files.length > 0) {
-        eliminarImagenesProducto(id);
-        for (let i = 0; i < req.files.length; i++) {
-          const file = req.files[i];
-          const extension = path.extname(file.originalname);
-          const nuevoNombre = `producto_${id}_${i + 1}${extension}`;
-          fs.renameSync(
-            path.join(file.destination, file.filename),
-            path.join(file.destination, nuevoNombre)
-          );
-          archivosRenombrados.push(nuevoNombre);
-        }
-      }
-
-      // Commit de la transacción
-      await transaction.commit();
-
-      return res.status(200).json({
-        message: "Producto y tamaños actualizados correctamente",
-        archivos_subidos: archivosRenombrados.length,
-        nombres_archivos: archivosRenombrados
-      });
-
-    } catch (err) {
-      // Rollback en caso de error
-      await transaction.rollback();
-      throw err;
+    if(updates.length > 0) {
+        await request.query(`UPDATE Producto SET ${updates.join(",")} WHERE ID_Producto=@ID`);
     }
 
+    // 2. Update Tamaños (Lógica inteligente: Update, Insert o Soft-Delete)
+    if (Producto_Tamano.length > 0 || req.body.Producto_Tamano) { // Solo si enviaron el array
+        // Obtener actuales
+        const currentSizes = await new sql.Request(transaction).input("ID", sql.Int, id)
+            .query("SELECT ID_Producto_T, ID_Tamano FROM Producto_Tamano WHERE ID_Producto = @ID");
+        
+        const currentMap = new Map(currentSizes.recordset.map(t => [t.ID_Tamano, t.ID_Producto_T]));
+        const newSizesIds = new Set(Producto_Tamano.map(t => t.ID_Tamano));
+
+        // A. Insertar o Actualizar
+        for (const t of Producto_Tamano) {
+            if (currentMap.has(t.ID_Tamano)) {
+                // Update Precio y Reactivar si estaba inactivo
+                await new sql.Request(transaction)
+                    .input("ID_PT", sql.Int, currentMap.get(t.ID_Tamano))
+                    .input("Precio", sql.Decimal(10,2), t.Precio)
+                    .query("UPDATE Producto_Tamano SET Precio=@Precio, Estado='A' WHERE ID_Producto_T=@ID_PT");
+            } else {
+                // Insert Nuevo
+                await new sql.Request(transaction)
+                    .input("ID_P", sql.Int, id)
+                    .input("ID_T", sql.Int, t.ID_Tamano)
+                    .input("Precio", sql.Decimal(10,2), t.Precio)
+                    .query("INSERT INTO Producto_Tamano (ID_Producto, ID_Tamano, Precio, Estado, Fecha_Registro) VALUES (@ID_P, @ID_T, @Precio, 'A', GETDATE())");
+            }
+        }
+
+        // B. Desactivar los que ya no vienen (Soft Delete)
+        for (const [idTamano, idPT] of currentMap) {
+            if (!newSizesIds.has(idTamano)) {
+                await new sql.Request(transaction).input("ID_PT", sql.Int, idPT)
+                    .query("UPDATE Producto_Tamano SET Estado='I' WHERE ID_Producto_T=@ID_PT");
+            }
+        }
+    }
+
+    // 3. Update Imágenes
+    if (req.files && req.files.length > 0) {
+        await eliminarImagenesProducto(id); // Borrar viejas
+        const movePromises = req.files.map(async (file, i) => {
+            const ext = path.extname(file.originalname);
+            const nuevoNombre = `producto_${id}_${i + 1}${ext}`;
+            await fs.rename(file.path, path.join(uploadDir, nuevoNombre));
+        });
+        await Promise.all(movePromises);
+    }
+
+    await transaction.commit();
+
+    // 4. Actualizar estado stock post-update
+    await actualizarEstadoProducto(pool, id);
+
+    return res.status(200).json({ 
+        message: "Producto actualizado correctamente",
+        imagenes: await getImagenesProducto(id)
+    });
+
   } catch (err) {
+    if (transaction) await transaction.rollback();
     console.error("updateProducto error:", err);
-    return res.status(500).json({ error: "Error al actualizar el producto" });
+    return res.status(500).json({ error: "Error al actualizar producto" });
   }
 };
 
 // ==============================
-// 📕 Eliminar un producto
+// 📕 Eliminar Producto
 // ==============================
 exports.deleteProducto = async (req, res) => {
   const { id } = req.params;
   try {
     const pool = await getConnection();
 
-    // 1) Eliminar imágenes asociadas
-    eliminarImagenesProducto(id);
+    // Validar dependencias (ej: Ventas, Combos) antes de borrar
+    // Por ahora hacemos borrado lógico o físico según regla de negocio.
+    // Aquí haremos físico + limpieza de imágenes.
 
-    // 2) Eliminar registros en Producto_Tamano primero
-    await pool.request()
-      .input("ID_Producto", sql.Int, id)
-      .query(`DELETE FROM Producto_Tamano WHERE ID_Producto = @ID_Producto`);
+    // 1. Borrar Imágenes
+    await eliminarImagenesProducto(id);
 
-    // 3) Luego eliminar el producto
-    const result = await pool
-      .request()
-      .input("ID_Producto", sql.Int, id)
-      .query("DELETE FROM Producto WHERE ID_Producto = @ID_Producto");
+    // 2. Borrar Tamaños
+    await pool.request().input("ID", sql.Int, id).query("DELETE FROM Producto_Tamano WHERE ID_Producto = @ID");
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Producto no encontrado" });
-    }
+    // 3. Borrar Producto
+    const result = await pool.request().input("ID", sql.Int, id).query("DELETE FROM Producto WHERE ID_Producto = @ID");
+
+    if (result.rowsAffected[0] === 0) return res.status(404).json({ error: "Producto no encontrado" });
 
     return res.status(200).json({ message: "Producto eliminado correctamente" });
 
   } catch (err) {
     console.error("deleteProducto error:", err);
-    return res.status(500).json({ error: "Error al eliminar el producto" });
+    if (err.number === 547) return res.status(409).json({ error: "No se puede eliminar: El producto está en uso en combos o ventas." });
+    return res.status(500).json({ error: "Error al eliminar producto" });
   }
 };

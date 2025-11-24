@@ -1,64 +1,18 @@
 const { sql, getConnection } = require("../config/Connection");
-const bdModel = require("../models/bd.models");
 const axios = require("axios");
+const bdModel = require("../models/bd.models"); 
 
 // ==============================
-// 🔧 FUNCIÓN: Asegurar que Clientes Varios tenga ID 1
-// ==============================
-async function asegurarClienteVarios() {
-  try {
-    const pool = await getConnection();
-    
-    // Verificar si ya existe un cliente llamado "Clientes Varios"
-    const checkCliente = await pool.request()
-      .input("Nombre", sql.VarChar(100), "Clientes Varios")
-      .query("SELECT ID_Cliente, Nombre FROM Cliente WHERE Nombre = @Nombre");
-
-    if (checkCliente.recordset.length > 0) {
-      console.log(`✅ Cliente 'Clientes Varios' ya existe con ID: ${checkCliente.recordset[0].ID_Cliente}`);
-      return checkCliente.recordset[0].ID_Cliente;
-    }
-
-    // Si no existe, crear el cliente (sin forzar ID)
-    const result = await pool.request()
-      .input("Nombre", sql.VarChar(100), "Clientes Varios")
-      .input("DNI", sql.VarChar(20), "")
-      .input("Apellido", sql.VarChar(100), "")
-      .input("Telefono", sql.VarChar(20), "")
-      .input("Fecha_Registro", sql.DateTime, new Date())
-      .query(`
-        INSERT INTO Cliente (DNI, Nombre, Apellido, Telefono, Fecha_Registro)
-        VALUES (@DNI, @Nombre, @Apellido, @Telefono, @Fecha_Registro);
-        SELECT SCOPE_IDENTITY() AS ID_Cliente;
-      `);
-    
-    const clienteId = result.recordset[0].ID_Cliente;
-    console.log(`✅ Cliente 'Clientes Varios' creado con ID: ${clienteId}`);
-    return clienteId;
-    
-  } catch (error) {
-    console.error("❌ Error asegurando cliente varios:", error.message);
-    return 1; // Retornar 1 como fallback
-  }
-}
-
-// ==============================
-// 🔄 Mapper: adapta una fila de BD al modelo Cliente
+// 🔄 Mapper: adapta fila BD -> Modelo
 // ==============================
 function mapToCliente(row = {}) {
-  const template = bdModel?.Cliente || {
-    ID_Cliente: 0,
-    DNI: "",
-    Nombre: "",
-    Apellido: "",
-    Telefono: "",
-    Fecha_Registro: ""
-  };
+  const template = bdModel.Cliente || {}; 
 
   return {
-    ...template,
+    ...template, 
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
-    DNI: row.DNI ?? template.DNI,
+    ID_Tipo_Doc: row.ID_Tipo_Doc ?? template.ID_Tipo_Doc,
+    Numero_Documento: row.Numero_Documento ?? template.Numero_Documento,
     Nombre: row.Nombre ?? template.Nombre,
     Apellido: row.Apellido ?? template.Apellido,
     Telefono: row.Telefono ?? template.Telefono,
@@ -72,7 +26,8 @@ function mapToCliente(row = {}) {
 exports.getClientes = async (_req, res) => {
   try {
     const pool = await getConnection();
-    const result = await pool.request().query("SELECT * FROM Cliente ORDER BY ID_Cliente DESC");
+    const query = `SELECT * FROM Cliente ORDER BY ID_Cliente DESC`;
+    const result = await pool.request().query(query);
     const clientes = (result.recordset || []).map(mapToCliente);
     return res.status(200).json(clientes);
   } catch (err) {
@@ -104,41 +59,79 @@ exports.getClienteById = async (req, res) => {
 };
 
 // ==============================
-// 📗 Crear un nuevo cliente
+// 📗 Crear un nuevo cliente (CON PUNTOS INICIALIZADOS)
 // ==============================
 exports.createCliente = async (req, res) => {
-  const { Nombre, Apellido, DNI, Telefono } = req.body;
+  const { Nombre, Apellido, Numero_Documento, Telefono, ID_Tipo_Doc } = req.body;
 
   try {
     const pool = await getConnection();
 
-    // 📌 Validar que el DNI no se repita (si fue proporcionado)
-    if (DNI && DNI.trim() !== "") {
+    // 1. Validar Duplicados
+    if (Numero_Documento && Numero_Documento.trim() !== "") {
       const existe = await pool.request()
-        .input("DNI", sql.VarChar(20), DNI.trim())
-        .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI");
+        .input("Doc", sql.VarChar(20), Numero_Documento.trim())
+        .query("SELECT ID_Cliente FROM Cliente WHERE Numero_Documento = @Doc");
 
       if (existe.recordset.length > 0) {
-        return res.status(400).json({ error: "Ya existe un cliente con ese DNI" });
+        return res.status(400).json({ error: "Ya existe un cliente con ese número de documento" });
       }
     }
 
-    // 📌 Insertar datos (los que falten se irán como NULL)
-    const request = pool.request()
-      .input("Nombre", sql.VarChar(100), Nombre?.trim() || null)
-      .input("Apellido", sql.VarChar(100), Apellido?.trim() || null)
-      .input("DNI", sql.VarChar(20), DNI?.trim() || null)
-      .input("Telefono", sql.VarChar(20), Telefono?.trim() || null)
-      .input("Fecha_Registro", sql.DateTime, new Date());
+    // 2. Lógica Tipo Doc
+    let finalTipoDoc = ID_Tipo_Doc;
+    if (!finalTipoDoc && Numero_Documento) {
+        const len = Numero_Documento.trim().length;
+        let abrev = (len === 8) ? 'DNI' : (len === 11) ? 'RUC' : null;
+        if (abrev) {
+            const tDoc = await pool.request().input("A", sql.VarChar(10), abrev)
+                .query("SELECT ID_Tipo_Doc FROM Tipo_Documento WHERE Abreviatura = @A");
+            if (tDoc.recordset.length > 0) finalTipoDoc = tDoc.recordset[0].ID_Tipo_Doc;
+        }
+    }
 
-    await request.query(`
-      INSERT INTO Cliente (Nombre, Apellido, DNI, Telefono, Fecha_Registro)
-      VALUES (@Nombre, @Apellido, @DNI, @Telefono, @Fecha_Registro);
-      SELECT SCOPE_IDENTITY() AS ID_Cliente;
-    `);
+    // ⚡ INICIAR TRANSACCIÓN
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
 
-    const clienteCreado = await pool.request().query("SELECT TOP 1 * FROM Cliente ORDER BY ID_Cliente DESC");
-    return res.status(201).json(mapToCliente(clienteCreado.recordset[0]));
+    try {
+        // 3. Insertar Cliente
+        const request = new sql.Request(transaction);
+        const resultCliente = await request
+          .input("ID_Tipo_Doc", sql.Int, finalTipoDoc || null)
+          .input("Numero_Documento", sql.VarChar(20), Numero_Documento?.trim() || null)
+          .input("Nombre", sql.VarChar(100), Nombre?.trim() || null)
+          .input("Apellido", sql.VarChar(100), Apellido?.trim() || null)
+          .input("Telefono", sql.VarChar(20), Telefono?.trim() || null)
+          .query(`
+            INSERT INTO Cliente (ID_Tipo_Doc, Numero_Documento, Nombre, Apellido, Telefono)
+            OUTPUT INSERTED.ID_Cliente
+            VALUES (@ID_Tipo_Doc, @Numero_Documento, @Nombre, @Apellido, @Telefono);
+          `);
+
+        const idNuevoCliente = resultCliente.recordset[0].ID_Cliente;
+
+        // 4. Crear registro de Puntos (Inicializado en 0)
+        await new sql.Request(transaction)
+            .input("ID_Cliente", sql.Int, idNuevoCliente)
+            .query(`
+                INSERT INTO Cliente_Puntos (ID_Cliente, Puntos_Acumulados, Fecha_Actualizacion)
+                VALUES (@ID_Cliente, 0, GETDATE())
+            `);
+
+        await transaction.commit();
+
+        // 5. Devolver respuesta
+        const ultimo = await pool.request()
+            .input("id", sql.Int, idNuevoCliente)
+            .query("SELECT * FROM Cliente WHERE ID_Cliente = @id");
+            
+        return res.status(201).json(mapToCliente(ultimo.recordset[0]));
+
+    } catch (errTransaction) {
+        await transaction.rollback();
+        throw errTransaction;
+    }
 
   } catch (err) {
     console.error("createCliente error:", err);
@@ -151,72 +144,40 @@ exports.createCliente = async (req, res) => {
 // ==============================
 exports.updateCliente = async (req, res) => {
   const { id } = req.params;
-  const { Nombre, Apellido, DNI, Telefono } = req.body;
+  const { Nombre, Apellido, Numero_Documento, Telefono, ID_Tipo_Doc } = req.body;
 
   try {
-    // Prevenir la modificación del cliente "Clientes Varios" (ID 1)
-    if (parseInt(id) === 1) {
-      return res.status(400).json({ 
-        error: "No se puede modificar el cliente 'Clientes Varios' (ID 1)" 
-      });
-    }
-
     const pool = await getConnection();
 
-    // 📌 Validar que el DNI no se repita (si fue proporcionado)
-    if (DNI && DNI.trim() !== "") {
+    if (Numero_Documento && Numero_Documento.trim() !== "") {
       const existe = await pool.request()
-        .input("DNI", sql.VarChar(20), DNI.trim())
+        .input("Doc", sql.VarChar(20), Numero_Documento.trim())
         .input("id", sql.Int, id)
-        .query("SELECT ID_Cliente FROM Cliente WHERE DNI = @DNI AND ID_Cliente <> @id");
+        .query("SELECT ID_Cliente FROM Cliente WHERE Numero_Documento = @Doc AND ID_Cliente <> @id");
 
       if (existe.recordset.length > 0) {
-        return res.status(400).json({ error: "El DNI ingresado ya pertenece a otro cliente" });
+        return res.status(400).json({ error: "El documento ya pertenece a otro cliente" });
       }
     }
 
     let query = `UPDATE Cliente SET`;
     const request = pool.request();
     request.input("id", sql.Int, id);
-
     let hasUpdates = false;
 
-    if (Nombre !== undefined) {
-      query += ` Nombre = @Nombre,`;
-      request.input("Nombre", sql.VarChar(100), Nombre?.trim() || null);
-      hasUpdates = true;
-    }
+    if (ID_Tipo_Doc !== undefined) { query += ` ID_Tipo_Doc = @ID_Tipo_Doc,`; request.input("ID_Tipo_Doc", sql.Int, ID_Tipo_Doc); hasUpdates = true; }
+    if (Numero_Documento !== undefined) { query += ` Numero_Documento = @Numero_Documento,`; request.input("Numero_Documento", sql.VarChar(20), Numero_Documento?.trim() || null); hasUpdates = true; }
+    if (Nombre !== undefined) { query += ` Nombre = @Nombre,`; request.input("Nombre", sql.VarChar(100), Nombre?.trim() || null); hasUpdates = true; }
+    if (Apellido !== undefined) { query += ` Apellido = @Apellido,`; request.input("Apellido", sql.VarChar(100), Apellido?.trim() || null); hasUpdates = true; }
+    if (Telefono !== undefined) { query += ` Telefono = @Telefono,`; request.input("Telefono", sql.VarChar(20), Telefono?.trim() || null); hasUpdates = true; }
 
-    if (Apellido !== undefined) {
-      query += ` Apellido = @Apellido,`;
-      request.input("Apellido", sql.VarChar(100), Apellido?.trim() || null);
-      hasUpdates = true;
-    }
+    if (!hasUpdates) return res.status(400).json({ error: "Nada que actualizar" });
 
-    if (DNI !== undefined) {
-      query += ` DNI = @DNI,`;
-      request.input("DNI", sql.VarChar(20), DNI?.trim() || null);
-      hasUpdates = true;
-    }
-
-    if (Telefono !== undefined) {
-      query += ` Telefono = @Telefono,`;
-      request.input("Telefono", sql.VarChar(20), Telefono?.trim() || null);
-      hasUpdates = true;
-    }
-
-    if (!hasUpdates) {
-      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
-    }
-
-    query = query.slice(0, -1); // quitar la coma final
-    query += ` WHERE ID_Cliente = @id`;
-
+    query = query.slice(0, -1) + ` WHERE ID_Cliente = @id`;
+    
     const result = await request.query(query);
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
-    }
+    if (result.rowsAffected[0] === 0) return res.status(404).json({ error: "Cliente no encontrado" });
 
     return res.status(200).json({ message: "Cliente actualizado correctamente" });
 
@@ -227,37 +188,54 @@ exports.updateCliente = async (req, res) => {
 };
 
 // ==============================
-// 📕 Eliminar cliente
+// 📕 Eliminar cliente (Con limpieza de puntos)
 // ==============================
 exports.deleteCliente = async (req, res) => {
   const { id } = req.params;
-
   try {
-    // Prevenir la eliminación del cliente "Clientes Varios" (ID 1)
-    if (parseInt(id) === 1) {
-      return res.status(400).json({ 
-        error: "No se puede eliminar el cliente 'Clientes Varios' (ID 1)" 
-      });
-    }
-
     const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query("DELETE FROM Cliente WHERE ID_Cliente = @id");
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Cliente no encontrado" });
+    const check = await pool.request().input("id", sql.Int, id)
+        .query("SELECT Nombre FROM Cliente WHERE ID_Cliente = @id");
+    if (check.recordset.length > 0 && check.recordset[0].Nombre === 'Clientes Varios') {
+        return res.status(400).json({ error: "No se puede eliminar 'Clientes Varios'" });
     }
 
-    return res.status(200).json({ message: "Cliente eliminado correctamente" });
+    // ⚡ Transacción para borrar puntos y luego cliente
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
+
+    try {
+        // 1. Borrar Puntos
+        await new sql.Request(transaction).input("id", sql.Int, id)
+            .query("DELETE FROM Cliente_Puntos WHERE ID_Cliente = @id");
+
+        // 2. Borrar Cliente
+        const result = await new sql.Request(transaction).input("id", sql.Int, id)
+            .query("DELETE FROM Cliente WHERE ID_Cliente = @id");
+
+        if (result.rowsAffected[0] === 0) {
+            await transaction.rollback();
+            return res.status(404).json({ error: "Cliente no encontrado" });
+        }
+
+        await transaction.commit();
+        return res.status(200).json({ message: "Cliente eliminado correctamente" });
+
+    } catch (errTrans) {
+        await transaction.rollback();
+        throw errTrans; // Lanzar para que lo capture el catch de abajo
+    }
+
   } catch (err) {
     console.error("deleteCliente error:", err);
-    return res.status(500).json({ error: "Error al eliminar el cliente" });
+    if (err.number === 547) return res.status(400).json({ error: "No se puede eliminar: Tiene ventas o pedidos asociados." });
+    return res.status(500).json({ error: "Error al eliminar" });
   }
 };
 
 // ==============================
-// 🔍 Buscar y guardar cliente por DNI o RUC
+// 🔍 Buscar y guardar (API EXTERNA + PUNTOS)
 // ==============================
 exports.buscarClientePorDocumento = async (req, res) => {
   const { doc } = req.params;
@@ -270,89 +248,131 @@ exports.buscarClientePorDocumento = async (req, res) => {
 
     const pool = await getConnection();
 
-    // 🔎 1. Verificar si ya existe en BD
+    // 1. Buscar en BD local
     const existe = await pool.request()
-      .input("DNI", sql.VarChar(20), doc.trim())
-      .query("SELECT * FROM Cliente WHERE DNI = @DNI");
+      .input("Doc", sql.VarChar(20), doc.trim())
+      .query("SELECT * FROM Cliente WHERE Numero_Documento = @Doc");
 
     if (existe.recordset.length > 0) {
       return res.status(200).json({
-        message: "Cliente ya registrado",
-        cliente: existe.recordset[0],
+        message: "Cliente encontrado en BD",
+        cliente: mapToCliente(existe.recordset[0]),
       });
     }
 
-    // ⚡ 2. Consultar la API externa
+    // 2. API Externa
     const headers = { Authorization: `Bearer ${token}` };
-    let nombre = "";
-    let apellido = "";
-    let tipo = "";
-    let info = {};
+    let nombre = "", apellido = "", tipoAbrev = "";
 
     if (doc.length === 8) {
-      // 🧍 Caso DNI
-      tipo = "DNI";
+      tipoAbrev = "DNI";
       const { data } = await axios.get(`https://apiperu.dev/api/dni/${doc}`, { headers });
-
-      if (!data.success) {
-        return res.status(404).json({ error: "DNI no encontrado" });
-      }
-
-      info = data.data;
-      nombre = info.nombres?.trim() || "";
-      apellido = `${info.apellido_paterno || ""} ${info.apellido_materno || ""}`.trim();
+      if (!data.success) return res.status(404).json({ error: "DNI no encontrado en API" });
+      
+      nombre = data.data.nombres?.trim() || "";
+      apellido = `${data.data.apellido_paterno || ""} ${data.data.apellido_materno || ""}`.trim();
 
     } else {
-      // 🏢 Caso RUC
-      tipo = "RUC";
+      tipoAbrev = "RUC";
       const { data } = await axios.get(`https://apiperu.dev/api/ruc/${doc}`, { headers });
+      if (!data.success) return res.status(404).json({ error: "RUC no encontrado en API" });
 
-      if (!data.success) {
-        return res.status(404).json({ error: "RUC no encontrado" });
-      }
-
-      info = data.data;
-
-      nombre = info.nombre_o_razon_social?.trim() || "";
-
-      // 🧾 Concatenamos datos importantes en Apellido
-      const estado = info.estado || "DESCONOCIDO";
-      const condicion = info.condicion || "DESCONOCIDO";
-      const agenteRetencion = info.es_agente_de_retencion || "NO";
-      const agentePercepcion = info.es_agente_de_percepcion || "NO";
-
-      apellido = `${estado} | ${condicion} | Retención: ${agenteRetencion} | Percepción: ${agentePercepcion}`;
+      nombre = data.data.nombre_o_razon_social?.trim() || "";
+      apellido = `${data.data.estado || ""} | ${data.data.condicion || ""}`;
     }
 
-    // 🧩 3. Insertar nuevo cliente en la BD
-    const insert = pool.request()
-      .input("DNI", sql.VarChar(20), doc.trim())
-      .input("Nombre", sql.VarChar(100), nombre || null)
-      .input("Apellido", sql.VarChar(200), apellido || null)
-      .input("Telefono", sql.VarChar(20), null)
-      .input("Fecha_Registro", sql.DateTime, new Date());
+    // 3. Buscar ID Tipo Doc
+    let idTipoDoc = null;
+    const tDoc = await pool.request().input("A", sql.VarChar(10), tipoAbrev)
+        .query("SELECT ID_Tipo_Doc FROM Tipo_Documento WHERE Abreviatura = @A");
+    if (tDoc.recordset.length > 0) idTipoDoc = tDoc.recordset[0].ID_Tipo_Doc;
 
-    await insert.query(`
-      INSERT INTO Cliente (DNI, Nombre, Apellido, Telefono, Fecha_Registro)
-      VALUES (@DNI, @Nombre, @Apellido, @Telefono, @Fecha_Registro);
-    `);
+    // ⚡ INICIAR TRANSACCIÓN
+    const transaction = new sql.Transaction(pool);
+    await transaction.begin();
 
-    // 🔁 4. Consultar y devolver cliente recién creado
-    const nuevo = await pool.request()
-      .input("DNI", sql.VarChar(20), doc.trim())
-      .query("SELECT TOP 1 * FROM Cliente WHERE DNI = @DNI ORDER BY ID_Cliente DESC");
+    try {
+        // 4. Insertar Cliente
+        const resultInsert = await new sql.Request(transaction)
+          .input("ID_Tipo_Doc", sql.Int, idTipoDoc)
+          .input("Numero_Documento", sql.VarChar(20), doc.trim())
+          .input("Nombre", sql.VarChar(100), nombre)
+          .input("Apellido", sql.VarChar(100), apellido)
+          .query(`
+            INSERT INTO Cliente (ID_Tipo_Doc, Numero_Documento, Nombre, Apellido, Telefono) 
+            OUTPUT INSERTED.ID_Cliente
+            VALUES (@ID_Tipo_Doc, @Numero_Documento, @Nombre, @Apellido, NULL)
+          `);
+        
+        const idNuevoCliente = resultInsert.recordset[0].ID_Cliente;
 
-    return res.status(201).json({
-      message: "Cliente creado correctamente",
-      tipo,
-      cliente: nuevo.recordset[0],
-    });
+        // 5. Crear registro de Puntos (0)
+        await new sql.Request(transaction)
+            .input("ID_Cliente", sql.Int, idNuevoCliente)
+            .query(`
+                INSERT INTO Cliente_Puntos (ID_Cliente, Puntos_Acumulados, Fecha_Actualizacion)
+                VALUES (@ID_Cliente, 0, GETDATE())
+            `);
+
+        await transaction.commit();
+
+        // 6. Retornar
+        const nuevo = await pool.request().input("Doc", sql.VarChar(20), doc.trim())
+            .query("SELECT TOP 1 * FROM Cliente WHERE Numero_Documento = @Doc ORDER BY ID_Cliente DESC");
+
+        return res.status(201).json({
+          message: "Cliente creado desde API externa con puntos inicializados",
+          cliente: mapToCliente(nuevo.recordset[0]),
+        });
+
+    } catch (errTrans) {
+        await transaction.rollback();
+        throw errTrans;
+    }
 
   } catch (error) {
-    console.error("Error en buscarClientePorDocumento:", error?.response?.data || error.message);
-    return res.status(500).json({ error: "Error al buscar o guardar el cliente" });
+    console.error("Error buscarClientePorDocumento:", error.message);
+    return res.status(500).json({ error: "Error interno" });
   }
 };
 
-// Exportar la función de aseguración
-exports.asegurarClienteVarios = asegurarClienteVarios;
+// ==============================
+// 🌟 Ver Puntos del Cliente (misPuntos)
+// ==============================
+exports.misPuntos = async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const pool = await getConnection();
+
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`
+        SELECT 
+            c.ID_Cliente, 
+            c.Nombre, 
+            c.Apellido, 
+            ISNULL(cp.Puntos_Acumulados, 0) AS Puntos
+        FROM Cliente c
+        LEFT JOIN Cliente_Puntos cp ON c.ID_Cliente = cp.ID_Cliente
+        WHERE c.ID_Cliente = @id
+      `);
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ error: "Cliente no encontrado" });
+    }
+
+    const data = result.recordset[0];
+
+    return res.status(200).json({
+      message: "Puntos obtenidos correctamente",
+      ID_Cliente: data.ID_Cliente,
+      Nombre_Completo: `${data.Nombre || ''} ${data.Apellido || ''}`.trim(),
+      Puntos: data.Puntos
+    });
+
+  } catch (err) {
+    console.error("misPuntos error:", err);
+    return res.status(500).json({ error: "Error al obtener los puntos del cliente" });
+  }
+};

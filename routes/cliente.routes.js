@@ -12,6 +12,7 @@ router.get("/clientes/:id", verifyToken, clienteController.getClienteById);
 router.post("/clientes", clienteController.createCliente);
 router.put("/clientes/:id", verifyToken, clienteController.updateCliente);
 router.delete("/clientes/:id", verifyToken, clienteController.deleteCliente);
+router.get("/clientes/puntos/:id", clienteController.misPuntos);
 
 // ==============================
 // 🔍 Buscar cliente por DNI o RUC (usando API externa apiperu.dev)

@@ -2,28 +2,17 @@ const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 
 // ==============================
-// 🔹 Mapper actualizado con nuevos campos
+// 🔹 Mapper
 // ==============================
 function mapToVenta(row = {}) {
-  const template = bdModel?.Venta || {
-    ID_Venta: 0,
-    ID_Pedido: 0,
-    Tipo_Venta: "",
-    Metodo_Pago: "",
-    Lugar_Emision: "",
-    IGV: 0.0,
-    Total: 0.0,
-    Monto_Recibido: 0.0,
-    Vuelto: 0.0,
-    Fecha_Registro: ""
-  };
+  const template = bdModel?.Venta || {};
   return {
     ...template,
     ID_Venta: row.ID_Venta ?? template.ID_Venta,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
-    Tipo_Venta: row.Tipo_Venta ?? template.Tipo_Venta,
-    Metodo_Pago: row.Metodo_Pago ?? template.Metodo_Pago,
-    Lugar_Emision: row.Lugar_Emision ?? template.Lugar_Emision,
+    ID_Tipo_Venta: row.ID_Tipo_Venta ?? template.ID_Tipo_Venta,
+    ID_Origen_Venta: row.ID_Origen_Venta ?? template.ID_Origen_Venta,
+    ID_Tipo_Pago: row.ID_Tipo_Pago ?? template.ID_Tipo_Pago,
     IGV: row.IGV ?? template.IGV,
     Total: row.Total ?? template.Total,
     Monto_Recibido: row.Monto_Recibido ?? template.Monto_Recibido,
@@ -33,21 +22,16 @@ function mapToVenta(row = {}) {
 }
 
 // ==============================
-// 🔹 Función helper: calcular descuentos, IGV y total (IGV = 0)
+// 🔹 Helper: Calcular Montos
 // ==============================
-async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar default a 0
-  // 1) Obtener subtotal del pedido
-  const pedidoRes = await pool.request()
-    .input("ID_Pedido", sql.Int, ID_Pedido)
+async function calcularMontos(pool, ID_Pedido) {
+  const pedidoRes = await pool.request().input("ID_Pedido", sql.Int, ID_Pedido)
     .query("SELECT SubTotal FROM Pedido WHERE ID_Pedido = @ID_Pedido");
 
   if (!pedidoRes.recordset.length) throw new Error("Pedido no encontrado");
   const pedidoSubTotal = Number(pedidoRes.recordset[0].SubTotal ?? 0);
 
-  // 2) Verificar uso de cupón
-  const usoRes = await pool.request()
-    .input("ID_Pedido", sql.Int, ID_Pedido)
-    .query(`
+  const usoRes = await pool.request().input("ID_Pedido", sql.Int, ID_Pedido).query(`
       SELECT uc.*, c.Tipo_Desc, c.Valor_Desc, c.Monto_Max
       FROM Uso_Cupon uc
       LEFT JOIN Cupones c ON uc.ID_Cupon = c.ID_Cupon
@@ -60,14 +44,7 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar 
 
   if (usoRes.recordset.length) {
     const uso = usoRes.recordset[0];
-    cuponAplicado = {
-      ID_Uso_C: uso.ID_Uso_C,
-      ID_Cupon: uso.ID_Cupon,
-      Tipo_Desc: uso.Tipo_Desc,
-      Valor_Desc: Number(uso.Valor_Desc ?? 0),
-      Monto_Max: Number(uso.Monto_Max ?? 0),
-      Descuento_Aplic: Number(uso.Descuento_Aplic ?? 0)
-    };
+    cuponAplicado = { ...uso, Valor_Desc: Number(uso.Valor_Desc), Monto_Max: Number(uso.Monto_Max), Descuento_Aplic: Number(uso.Descuento_Aplic) };
 
     if (cuponAplicado.Descuento_Aplic > 0) {
       descuentoMonto = cuponAplicado.Descuento_Aplic;
@@ -77,7 +54,7 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar 
       } else {
         descuentoMonto = cuponAplicado.Valor_Desc || 0;
       }
-      if (cuponAplicado.Monto_Max && cuponAplicado.Monto_Max > 0 && descuentoMonto > cuponAplicado.Monto_Max) {
+      if (cuponAplicado.Monto_Max > 0 && descuentoMonto > cuponAplicado.Monto_Max) {
         descuentoMonto = cuponAplicado.Monto_Max;
       }
       descuentoMonto = Number(descuentoMonto.toFixed(2));
@@ -85,86 +62,69 @@ async function calcularMontos(pool, ID_Pedido, IGV_Porcentaje = 0) { // Cambiar 
   }
 
   const subtotalConCupon = Math.max(0, pedidoSubTotal - descuentoMonto);
-  
-  // 🔹 CAMBIO PRINCIPAL: IGV siempre será 0
-  const igvMonto = 0; // IGV fijo en 0
-  
-  // 🔹 Total será igual al subtotal con cupón (sin agregar IGV)
+  const igvMonto = 0; 
   const totalFinal = Number(subtotalConCupon.toFixed(2));
 
   return { pedidoSubTotal, descuentoMonto, subtotalConCupon, igvMonto, totalFinal, cuponAplicado };
 }
 
 // ==============================
-// 🔹 Listar ventas enriquecido - ACTUALIZADO con ID_Combo
+// 🔹 Helper: Sumar Puntos (10% del Total)
+// ==============================
+async function sumarPuntosCliente(transaction, ID_Cliente, Monto_Total) {
+    try {
+        // Regla: 10% del total
+        const puntosGanados = Math.floor(Monto_Total * 0.10);
+        if (puntosGanados <= 0) return 0;
+
+        const checkPuntos = await new sql.Request(transaction)
+            .input("ID_Cliente", sql.Int, ID_Cliente)
+            .query("SELECT ID_Puntos FROM Cliente_Puntos WHERE ID_Cliente = @ID_Cliente");
+
+        if (checkPuntos.recordset.length > 0) {
+            await new sql.Request(transaction)
+                .input("Puntos", sql.Int, puntosGanados)
+                .input("ID_Cliente", sql.Int, ID_Cliente)
+                .query("UPDATE Cliente_Puntos SET Puntos_Acumulados = Puntos_Acumulados + @Puntos, Fecha_Actualizacion = GETDATE() WHERE ID_Cliente = @ID_Cliente");
+        } else {
+            await new sql.Request(transaction)
+                .input("ID_Cliente", sql.Int, ID_Cliente)
+                .input("Puntos", sql.Int, puntosGanados)
+                .query("INSERT INTO Cliente_Puntos (ID_Cliente, Puntos_Acumulados, Fecha_Actualizacion) VALUES (@ID_Cliente, @Puntos, GETDATE())");
+        }
+        return puntosGanados;
+    } catch (error) {
+        console.error("Error sumando puntos:", error);
+        return 0;
+    }
+}
+
+// ==============================
+// 🔹 Listar ventas (Historial)
 // ==============================
 exports.getVentas = async (_req, res) => {
   try {
     const pool = await getConnection();
     const sqlQuery = `
       SELECT 
-        v.ID_Venta,
-        v.ID_Pedido,
-        v.Tipo_Venta,
-        v.Fecha_Registro,
-        c.Nombre AS Cliente_Nombre,
-        p.Estado_P,
-        v.Metodo_Pago,
-        v.Lugar_Emision,
-        v.IGV,
-        v.Total,
-        v.Monto_Recibido,
-        v.Vuelto,
-        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
-        STRING_AGG(
-          CASE 
-            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
-              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
-            ELSE 
-              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
-          END, 
-          ', '
-        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        v.*, 
+        c.Nombre AS Cliente_Nombre, 
+        tv.Nombre AS Tipo_Venta_Nombre,
+        ov.Nombre AS Origen_Venta_Nombre,
+        tp.Nombre AS Metodo_Pago_Nombre
       FROM Ventas v
       INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
       LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
-      LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
-      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
-      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
-      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
-      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      -- 🔹 NUEVO: LEFT JOIN para combos
-      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
-      GROUP BY 
-        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
-        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
-        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
+      LEFT JOIN Tipo_Venta tv ON v.ID_Tipo_Venta = tv.ID_Tipo_Venta
+      LEFT JOIN Origen_Venta ov ON v.ID_Origen_Venta = ov.ID_Origen_Venta
+      LEFT JOIN Tipo_Pago tp ON v.ID_Tipo_Pago = tp.ID_Tipo_Pago
       ORDER BY v.ID_Venta DESC
     `;
-
     const result = await pool.request().query(sqlQuery);
-
-    const ventas = (result.recordset || []).map(r => ({
-      ID_Venta: r.ID_Venta,
-      ID_Pedido: r.ID_Pedido,
-      Tipo_Venta: r.Tipo_Venta,
-      Fecha_Registro: r.Fecha_Registro,
-      Cliente_Nombre: r.Cliente_Nombre,
-      Estado_Pedido: r.Estado_P,
-      Metodo_Pago: r.Metodo_Pago,
-      Lugar_Emision: r.Lugar_Emision,
-      IGV: r.IGV,
-      Total: r.Total,
-      Monto_Recibido: r.Monto_Recibido,
-      Vuelto: r.Vuelto,
-      Detalles_Pedido: r.Detalles_Pedido || ""
-    }));
-
-    res.status(200).json(ventas);
-
+    return res.status(200).json(result.recordset);
   } catch (err) {
     console.error("getVentas error:", err);
-    res.status(500).json({ error: "Error al obtener las ventas" });
+    return res.status(500).json({ error: "Error al obtener las ventas" });
   }
 };
 
@@ -175,24 +135,21 @@ exports.getVentaById = async (req, res) => {
   try {
     const { id } = req.params;
     const pool = await getConnection();
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query("SELECT * FROM Ventas WHERE ID_Venta = @id");
-
+    const result = await pool.request().input("id", sql.Int, id).query("SELECT * FROM Ventas WHERE ID_Venta = @id");
     if (!result.recordset.length) return res.status(404).json({ error: "Venta no encontrada" });
-    res.status(200).json(mapToVenta(result.recordset[0]));
+    return res.status(200).json(mapToVenta(result.recordset[0]));
   } catch (err) {
-    console.error("getVentaById error:", err);
-    res.status(500).json({ error: "Error al obtener la venta" });
+    return res.status(500).json({ error: "Error al obtener la venta" });
   }
 };
 
 // ==============================
-// 🔹 Crear venta (sin IGV) - ACTUALIZADO con nuevos campos
+// 🔹 Crear venta (Con Puntos)
 // ==============================
 exports.createVenta = async (req, res) => {
-  const { ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, Monto_Recibido } = req.body;
-  if (!ID_Pedido || !Tipo_Venta || !Metodo_Pago) {
+  const { ID_Pedido, ID_Tipo_Venta, ID_Origen_Venta, ID_Tipo_Pago, Monto_Recibido } = req.body;
+
+  if (!ID_Pedido || !ID_Tipo_Venta || !ID_Origen_Venta || !ID_Tipo_Pago) {
     return res.status(400).json({ error: "Faltan campos obligatorios" });
   }
 
@@ -202,32 +159,27 @@ exports.createVenta = async (req, res) => {
   try {
     await transaction.begin();
 
-    // Calcular montos (IGV será 0 automáticamente)
     const montos = await calcularMontos(transaction, ID_Pedido);
-
-    // Calcular vuelto si se proporcionó Monto_Recibido
     const montoRecibidoNum = Monto_Recibido ? Number(Monto_Recibido) : 0;
     const vuelto = montoRecibidoNum > 0 ? Math.max(0, montoRecibidoNum - montos.totalFinal) : 0;
 
-    // Insertar venta con nuevos campos
     const insertRes = await new sql.Request(transaction)
       .input("ID_Pedido", sql.Int, ID_Pedido)
-      .input("Tipo_Venta", sql.VarChar(1), Tipo_Venta)
-      .input("Metodo_Pago", sql.Char(1), Metodo_Pago)
-      .input("Lugar_Emision", sql.Char(1), Lugar_Emision || "B")
-      .input("IGV", sql.Decimal(10,2), montos.igvMonto) // Esto será 0
-      .input("Total", sql.Decimal(10,2), montos.totalFinal) // Esto será igual al subtotal con cupón
+      .input("ID_Tipo_Venta", sql.Int, ID_Tipo_Venta)
+      .input("ID_Origen_Venta", sql.Int, ID_Origen_Venta)
+      .input("ID_Tipo_Pago", sql.Int, ID_Tipo_Pago)
+      .input("IGV", sql.Decimal(10,2), montos.igvMonto)
+      .input("Total", sql.Decimal(10,2), montos.totalFinal)
       .input("Monto_Recibido", sql.Decimal(10,2), montoRecibidoNum)
       .input("Vuelto", sql.Decimal(10,2), vuelto)
       .query(`
-        INSERT INTO Ventas (ID_Pedido, Tipo_Venta, Metodo_Pago, Lugar_Emision, IGV, Total, Monto_Recibido, Vuelto)
+        INSERT INTO Ventas (ID_Pedido, ID_Tipo_Venta, ID_Origen_Venta, ID_Tipo_Pago, IGV, Total, Monto_Recibido, Vuelto)
         OUTPUT INSERTED.ID_Venta
-        VALUES (@ID_Pedido, @Tipo_Venta, @Metodo_Pago, @Lugar_Emision, @IGV, @Total, @Monto_Recibido, @Vuelto)
+        VALUES (@ID_Pedido, @ID_Tipo_Venta, @ID_Origen_Venta, @ID_Tipo_Pago, @IGV, @Total, @Monto_Recibido, @Vuelto)
       `);
 
     const nuevoID_Venta = insertRes.recordset[0].ID_Venta;
 
-    // Actualizar uso de cupón si aplica
     if (montos.cuponAplicado && montos.cuponAplicado.Descuento_Aplic === 0) {
       await new sql.Request(transaction)
         .input("ID_Uso_C", sql.Int, montos.cuponAplicado.ID_Uso_C)
@@ -235,618 +187,273 @@ exports.createVenta = async (req, res) => {
         .query("UPDATE Uso_Cupon SET Descuento_Aplic=@Descuento_Aplic WHERE ID_Uso_C=@ID_Uso_C");
     }
 
+    // Lógica de Puntos (Cliente != ID 1)
+    let puntosGanados = 0;
+    const pedidoInfo = await new sql.Request(transaction)
+        .input("ID_Pedido", sql.Int, ID_Pedido)
+        .query("SELECT ID_Cliente FROM Pedido WHERE ID_Pedido = @ID_Pedido");
+    
+    const idCliente = pedidoInfo.recordset[0].ID_Cliente;
+    if (idCliente > 1) { // Si no es "Clientes Varios"
+        puntosGanados = await sumarPuntosCliente(transaction, idCliente, montos.totalFinal);
+    }
+
     await transaction.commit();
 
     res.status(201).json({
       message: "Venta registrada correctamente",
       ID_Venta: nuevoID_Venta,
-      ID_Pedido,
-      SubTotal_Pedido: montos.pedidoSubTotal,
-      Descuento_Aplicado: montos.descuentoMonto,
-      SubTotal_Con_Cupon: montos.subtotalConCupon,
-      IGV: montos.igvMonto, // Esto será 0
-      Total: montos.totalFinal, // Esto será igual al subtotal con cupón
-      Monto_Recibido: montoRecibidoNum,
-      Vuelto: vuelto,
-      Cupon_Aplicado: montos.cuponAplicado ? {
-        ID_Cupon: montos.cuponAplicado.ID_Cupon,
-        Tipo_Desc: montos.cuponAplicado.Tipo_Desc,
-        Valor_Desc: montos.cuponAplicado.Valor_Desc
-      } : null
+      Total: montos.totalFinal,
+      Puntos_Ganados: puntosGanados,
+      Vuelto: vuelto
     });
 
   } catch (err) {
     await transaction.rollback();
     console.error("createVenta error:", err);
-    res.status(500).json({ error: "Error al registrar la venta" });
+    res.status(500).json({ error: "Error al registrar venta" });
   }
 };
 
 // ==============================
-// 🔹 Actualizar venta (para montos recibidos y vuelto)
+// 🔹 Actualizar venta
 // ==============================
 exports.updateVenta = async (req, res) => {
   const { id } = req.params;
   const { Monto_Recibido, Vuelto } = req.body;
-
   try {
     const pool = await getConnection();
-    
     const result = await pool.request()
       .input("ID_Venta", sql.Int, id)
       .input("Monto_Recibido", sql.Decimal(10,2), Monto_Recibido || 0)
       .input("Vuelto", sql.Decimal(10,2), Vuelto || 0)
-      .query(`
-        UPDATE Ventas 
-        SET Monto_Recibido = @Monto_Recibido, Vuelto = @Vuelto
-        WHERE ID_Venta = @ID_Venta
-      `);
+      .query(`UPDATE Ventas SET Monto_Recibido = @Monto_Recibido, Vuelto = @Vuelto WHERE ID_Venta = @ID_Venta`);
 
-    if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ error: "Venta no encontrada" });
-    }
-
-    res.status(200).json({ 
-      message: "Venta actualizada correctamente",
-      Monto_Recibido: Monto_Recibido || 0,
-      Vuelto: Vuelto || 0
-    });
-
+    if (result.rowsAffected[0] === 0) return res.status(404).json({ error: "Venta no encontrada" });
+    res.status(200).json({ message: "Venta actualizada" });
   } catch (err) {
-    console.error("updateVenta error:", err);
-    res.status(500).json({ error: "Error al actualizar la venta" });
+    res.status(500).json({ error: "Error al actualizar" });
   }
 };
 
 // ==============================
-// 🔹 Datos de boleta/factura - ACTUALIZADO con ID_Combo
+// 🔹 Datos de Boleta
 // ==============================
 exports.datosBoletaVenta = async (req, res) => {
   try {
     const { id } = req.params;
     const pool = await getConnection();
 
-    const ventaRes = await pool.request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT v.*, p.SubTotal AS Pedido_SubTotal, p.Notas
+    // Consulta con Joins a las nuevas tablas
+    const ventaRes = await pool.request().input("id", sql.Int, id).query(`
+        SELECT v.*, p.SubTotal AS Pedido_SubTotal, p.Notas, 
+               c.Nombre as Cliente_Nombre, c.Numero_Documento,
+               tv.Nombre as Tipo_Comprobante, tp.Nombre as Forma_Pago
         FROM Ventas v
         INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+        INNER JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+        INNER JOIN Tipo_Venta tv ON v.ID_Tipo_Venta = tv.ID_Tipo_Venta
+        INNER JOIN Tipo_Pago tp ON v.ID_Tipo_Pago = tp.ID_Tipo_Pago
         WHERE v.ID_Venta = @id
-      `);
+    `);
 
     if (!ventaRes.recordset.length) return res.status(404).json({ error: "Venta no encontrada" });
     const venta = ventaRes.recordset[0];
 
-    // Usar la función calcularMontos actualizada (IGV será 0)
-    const montos = await calcularMontos(pool, venta.ID_Pedido);
-
-    // 🔹 ACTUALIZADO: Consulta que incluye ID_Combo
-    const detallesRes = await pool.request()
-      .input("ID_Pedido", sql.Int, venta.ID_Pedido)
-      .query(`
-        SELECT 
-          pd.ID_Pedido_D, 
-          pd.ID_Producto_T, 
-          pd.ID_Combo, -- 🔹 NUEVO: Incluir ID_Combo
-          pd.Cantidad, 
-          pd.PrecioTotal,
-          -- Información de producto (si aplica)
-          pr.Nombre AS Producto_Nombre,
-          t.Tamano AS Tamano_Nombre,
-          -- Información de combo (si aplica)
-          cm.Nombre AS Combo_Nombre,
-          cm.Descripcion AS Combo_Descripcion
+    // Detalles
+    const detallesRes = await pool.request().input("ID_Pedido", sql.Int, venta.ID_Pedido).query(`
+        SELECT pd.Cantidad, pd.PrecioTotal,
+               ISNULL(pr.Nombre, cm.Nombre) as Item_Nombre,
+               t.Tamano as Tamano_Nombre,
+               CASE WHEN pd.ID_Combo IS NOT NULL THEN 'Combo' ELSE 'Producto' END as Tipo
         FROM Pedido_Detalle pd
-        -- 🔹 ACTUALIZADO: LEFT JOIN para productos
         LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
         LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
         LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-        -- 🔹 NUEVO: LEFT JOIN para combos
         LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
         WHERE pd.ID_Pedido = @ID_Pedido
-        ORDER BY pd.ID_Pedido_D
-      `);
-
-    // 🔹 ACTUALIZADO: Procesar detalles para determinar tipo
-    const detallesProcesados = detallesRes.recordset.map(d => {
-      const esCombo = d.ID_Combo && d.ID_Combo > 0;
-      
-      return {
-        ID_Pedido_D: d.ID_Pedido_D,
-        ID_Producto_T: d.ID_Producto_T,
-        ID_Combo: d.ID_Combo,
-        Producto_Nombre: esCombo ? d.Combo_Nombre : d.Producto_Nombre,
-        Tamano_Nombre: esCombo ? 'Combo' : (d.Tamano_Nombre || 'Único'),
-        Descripcion: esCombo ? d.Combo_Descripcion : null,
-        Cantidad: d.Cantidad,
-        PrecioTotal: d.PrecioTotal,
-        Tipo: esCombo ? 'combo' : 'producto'
-      };
-    });
+    `);
 
     res.status(200).json({
-      exito: true,
-      venta: {
-        ID_Venta: venta.ID_Venta,
-        ID_Pedido: venta.ID_Pedido,
-        Tipo_Venta: venta.Tipo_Venta,
-        Metodo_Pago: venta.Metodo_Pago,
-        Lugar_Emision: venta.Lugar_Emision,
-        Monto_Recibido: venta.Monto_Recibido,
-        Vuelto: venta.Vuelto,
-        Fecha_Registro: venta.Fecha_Registro
-      },
-      pedido: {
-        SubTotal_Original: montos.pedidoSubTotal,
-        Descuento_Aplicado: montos.descuentoMonto,
-        SubTotal_Con_Cupon: montos.subtotalConCupon,
-        IGV: montos.igvMonto, // Esto será 0
-        Total: montos.totalFinal, // Esto será igual al subtotal con cupón
-        Notas: venta.Notas || ""
-      },
-      cupon: montos.cuponAplicado ? {
-        ID_Cupon: montos.cuponAplicado.ID_Cupon,
-        Tipo_Desc: montos.cuponAplicado.Tipo_Desc,
-        Valor_Desc: montos.cuponAplicado.Valor_Desc
-      } : null,
-      detalles: detallesProcesados
+      venta: venta,
+      detalles: detallesRes.recordset
     });
 
   } catch (err) {
     console.error("datosBoletaVenta error:", err);
-    res.status(500).json({ error: "Error al obtener los datos de la venta" });
+    res.status(500).json({ error: "Error obteniendo datos de boleta" });
   }
 };
 
 // ==============================
-// 🔹 Detalles de Venta - ACTUALIZADO con ID_Combo
+// 🔹 Detalles de Venta (RECUPERADO Y ADAPTADO)
 // ==============================
 exports.detallesVenta = async (req, res) => {
   try {
     const { id } = req.params;
-    if (!id) return res.status(400).json({ error: "Se requiere ID de Venta" });
-
     const pool = await getConnection();
 
     const sqlQuery = `
       SELECT
-          v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Metodo_Pago, v.Lugar_Emision, 
-          v.IGV, v.Total, v.Monto_Recibido, v.Vuelto, v.Fecha_Registro,
+          v.ID_Venta, v.ID_Pedido, v.Fecha_Registro,
+          tv.Nombre as Tipo_Venta, tp.Nombre as Metodo_Pago, ov.Nombre as Lugar_Emision,
+          v.IGV, v.Total, v.Monto_Recibido, v.Vuelto,
           p.ID_Cliente, p.ID_Usuario, p.SubTotal, p.Notas,
           
           pd.ID_Pedido_D, pd.ID_Producto_T, pd.ID_Combo, pd.Cantidad, pd.PrecioTotal,
           
-          c.Nombre AS Nombre_Cliente,
-          CASE WHEN LEN(c.DNI) > 8 THEN NULL ELSE c.Apellido END AS Apellido_Cliente,
-          c.DNI,
-          
+          c.Nombre AS Nombre_Cliente, c.Numero_Documento,
           u.Perfil AS Perfil_Usuario,
-          -- 🔹 ACTUALIZADO: Información de producto Y combo
-          CASE 
-            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN cm.Nombre
-            ELSE pr.Nombre 
-          END AS Nombre_Producto,
-          CASE 
-            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 'Combo'
-            ELSE t.Tamano 
-          END AS Tamano_Nombre,
-          -- 🔹 NUEVO: Información adicional del combo
-          cm.Descripcion AS Combo_Descripcion
-      FROM
-          ventas v
-      JOIN
-          Pedido p ON v.ID_Pedido = p.ID_Pedido
-      JOIN
-          Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
-      JOIN
-          Cliente c ON p.ID_Cliente = c.ID_Cliente
-      JOIN
-          Usuario u ON p.ID_Usuario = u.ID_Usuario
-      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
-      LEFT JOIN
-          Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
-      LEFT JOIN
-          Producto pr ON pt.ID_Producto = pr.ID_Producto
-      LEFT JOIN
-          Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      -- 🔹 NUEVO: LEFT JOIN para combos
-      LEFT JOIN
-          Combos cm ON pd.ID_Combo = cm.ID_Combo
-      WHERE
-          v.ID_Venta = @id
-      ORDER BY
-          pd.ID_Pedido_D;
+          
+          CASE WHEN pd.ID_Combo IS NOT NULL THEN cm.Nombre ELSE pr.Nombre END AS Nombre_Producto,
+          CASE WHEN pd.ID_Combo IS NOT NULL THEN 'Combo' ELSE t.Tamano END AS Tamano_Nombre
+      FROM Ventas v
+      JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+      JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
+      JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      JOIN Usuario u ON p.ID_Usuario = u.ID_Usuario
+      JOIN Tipo_Venta tv ON v.ID_Tipo_Venta = tv.ID_Tipo_Venta
+      JOIN Tipo_Pago tp ON v.ID_Tipo_Pago = tp.ID_Tipo_Pago
+      JOIN Origen_Venta ov ON v.ID_Origen_Venta = ov.ID_Origen_Venta
+      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
+      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
+      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
+      WHERE v.ID_Venta = @id
     `;
 
-    const result = await pool.request()
-      .input("id", sql.Int, id)
-      .query(sqlQuery);
+    const result = await pool.request().input("id", sql.Int, id).query(sqlQuery);
 
-    if (!result.recordset.length) {
-      return res.status(404).json({ error: "Venta no encontrada" });
-    }
+    if (!result.recordset.length) return res.status(404).json({ error: "Venta no encontrada" });
 
-    // Procesamos los resultados
-    const firstRow = result.recordset[0];
-
-    const ventaInfo = {
-      ID_Venta: firstRow.ID_Venta,
-      ID_Pedido: firstRow.ID_Pedido,
-      Tipo_Venta: firstRow.Tipo_Venta,
-      Metodo_Pago: firstRow.Metodo_Pago,
-      Lugar_Emision: firstRow.Lugar_Emision,
-      IGV: firstRow.IGV,
-      Total: firstRow.Total,
-      Monto_Recibido: firstRow.Monto_Recibido,
-      Vuelto: firstRow.Vuelto,
-      Fecha_Registro: firstRow.Fecha_Registro,
-      Notas_Pedido: firstRow.Notas || ""
+    const row = result.recordset[0];
+    const venta = {
+      ID_Venta: row.ID_Venta, ID_Pedido: row.ID_Pedido,
+      Tipo_Venta: row.Tipo_Venta, Metodo_Pago: row.Metodo_Pago, Lugar_Emision: row.Lugar_Emision,
+      Total: row.Total, Fecha: row.Fecha_Registro, Cliente: row.Nombre_Cliente, DNI: row.Numero_Documento
     };
 
-    const clienteInfo = {
-      ID_Cliente: firstRow.ID_Cliente,
-      Nombre: firstRow.Nombre_Cliente,
-      Apellido: firstRow.Apellido_Cliente,
-      DNI: firstRow.DNI
-    };
+    const detalles = result.recordset.map(r => ({
+      Producto: r.Nombre_Producto,
+      Tamano: r.Tamano_Nombre,
+      Cantidad: r.Cantidad,
+      Precio: r.PrecioTotal
+    }));
 
-    const usuarioInfo = {
-      ID_Usuario: firstRow.ID_Usuario,
-      Perfil: firstRow.Perfil_Usuario
-    };
-
-    // 🔹 ACTUALIZADO: Mapear detalles incluyendo información de combos
-    const detallesPedido = result.recordset.map(row => {
-      const esCombo = row.ID_Combo && row.ID_Combo > 0;
-      
-      return {
-        ID_Pedido_D: row.ID_Pedido_D,
-        ID_Producto_T: row.ID_Producto_T,
-        ID_Combo: row.ID_Combo,
-        Producto_Nombre: row.Nombre_Producto,
-        Tamano_Nombre: row.Tamano_Nombre,
-        Descripcion: esCombo ? row.Combo_Descripcion : null,
-        Cantidad: row.Cantidad,
-        PrecioTotal: row.PrecioTotal,
-        Tipo: esCombo ? 'combo' : 'producto'
-      };
-    });
-
-    // Enviamos la respuesta estructurada
-    res.status(200).json({
-      exito: true,
-      venta: ventaInfo,
-      cliente: clienteInfo,
-      usuario: usuarioInfo,
-      detalles: detallesPedido
-    });
+    res.status(200).json({ venta, detalles });
 
   } catch (err) {
-    console.error("detallesVenta error:", err);
-    res.status(500).json({ error: "Error al obtener los detalles de la venta" });
+    res.status(500).json({ error: "Error al obtener detalles" });
   }
 };
 
 // ==============================
-// 🔹 Ventas del día de hoy - ACTUALIZADO con ID_Combo
+// 🔹 Ventas de Hoy (RECUPERADO)
 // ==============================
 exports.getVentasHoy = async (_req, res) => {
   try {
     const pool = await getConnection();
-    
+    // Usamos Joins para mostrar nombres en vez de IDs
     const sqlQuery = `
       SELECT 
-        v.ID_Venta,
-        v.ID_Pedido,
-        v.Tipo_Venta,
-        v.Fecha_Registro,
+        v.ID_Venta, v.Total, v.Fecha_Registro,
         c.Nombre AS Cliente_Nombre,
-        p.Estado_P,
-        v.Metodo_Pago,
-        v.Lugar_Emision,
-        v.IGV,
-        v.Total,
-        v.Monto_Recibido,
-        v.Vuelto,
-        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
-        STRING_AGG(
-          CASE 
-            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
-              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
-            ELSE 
-              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
-          END, 
-          ', '
-        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
+        tv.Nombre AS Tipo_Venta,
+        tp.Nombre AS Metodo_Pago,
+        STRING_AGG(ISNULL(pr.Nombre, cm.Nombre) + ' x ' + CAST(pd.Cantidad AS VARCHAR), ', ') 
+        WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles
       FROM Ventas v
-      INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
-      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
-      LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
-      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
+      JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+      JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      JOIN Tipo_Venta tv ON v.ID_Tipo_Venta = tv.ID_Tipo_Venta
+      JOIN Tipo_Pago tp ON v.ID_Tipo_Pago = tp.ID_Tipo_Pago
+      JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
       LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
       LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
-      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      -- 🔹 NUEVO: LEFT JOIN para combos
       LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
       WHERE CAST(v.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
-      GROUP BY 
-        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
-        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
-        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
+      GROUP BY v.ID_Venta, v.Total, v.Fecha_Registro, c.Nombre, tv.Nombre, tp.Nombre
       ORDER BY v.Fecha_Registro DESC
     `;
 
     const result = await pool.request().query(sqlQuery);
-
-    const ventas = (result.recordset || []).map(r => ({
-      ID_Venta: r.ID_Venta,
-      ID_Pedido: r.ID_Pedido,
-      Tipo_Venta: r.Tipo_Venta,
-      Fecha_Registro: r.Fecha_Registro,
-      Cliente_Nombre: r.Cliente_Nombre,
-      Estado_Pedido: r.Estado_P,
-      Metodo_Pago: r.Metodo_Pago,
-      Lugar_Emision: r.Lugar_Emision,
-      IGV: r.IGV,
-      Total: r.Total,
-      Monto_Recibido: r.Monto_Recibido,
-      Vuelto: r.Vuelto,
-      Detalles_Pedido: r.Detalles_Pedido || ""
-    }));
-
-    // Calcular estadísticas del día
-    const estadisticas = {
-      totalVentas: ventas.length,
-      totalIngresos: ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0),
-      promedioVenta: ventas.length > 0 ? 
-        ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0) / ventas.length : 0,
-      fecha: new Date().toISOString().split('T')[0]
-    };
+    
+    // Calcular totales rápidos
+    const totalVentas = result.recordset.length;
+    const ingresos = result.recordset.reduce((sum, v) => sum + v.Total, 0);
 
     res.status(200).json({
-      ventas,
-      estadisticas
+      resumen: { totalVentas, ingresos },
+      ventas: result.recordset
     });
 
   } catch (err) {
-    console.error("getVentasHoy error:", err);
-    res.status(500).json({ error: "Error al obtener las ventas del día" });
+    res.status(500).json({ error: "Error obteniendo ventas de hoy" });
   }
 };
 
 // ==============================
-// 🔹 Ventas por período (día, semana, mes, año) - ACTUALIZADO con ID_Combo
+// 🔹 Ventas Por Periodo (RECUPERADO)
 // ==============================
 exports.getVentasPorPeriodo = async (req, res) => {
   try {
-    const { periodo, fecha } = req.query; // periodo: 'dia', 'semana', 'mes', 'año'
-    
-    if (!periodo) {
-      return res.status(400).json({ 
-        error: "Se requiere el parámetro 'periodo' (dia, semana, mes, año)" 
-      });
-    }
-
+    const { periodo } = req.query; // dia, semana, mes
     const pool = await getConnection();
-    let whereClause = "";
-    let fechaInicio, fechaFin;
+    let filter = "";
 
-    // Determinar el rango de fechas según el período
-    switch (periodo.toLowerCase()) {
-      case 'dia':
-        const fechaConsulta = fecha ? new Date(fecha) : new Date();
-        fechaInicio = new Date(fechaConsulta);
-        fechaInicio.setHours(0, 0, 0, 0);
-        fechaFin = new Date(fechaConsulta);
-        fechaFin.setHours(23, 59, 59, 999);
-        
-        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
-        break;
+    if (periodo === 'dia') filter = "CAST(v.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)";
+    else if (periodo === 'semana') filter = "DATEPART(week, v.Fecha_Registro) = DATEPART(week, GETDATE()) AND YEAR(v.Fecha_Registro) = YEAR(GETDATE())";
+    else if (periodo === 'mes') filter = "MONTH(v.Fecha_Registro) = MONTH(GETDATE()) AND YEAR(v.Fecha_Registro) = YEAR(GETDATE())";
+    else return res.status(400).json({ error: "Periodo inválido" });
 
-      case 'semana':
-        const hoy = fecha ? new Date(fecha) : new Date();
-        const inicioSemana = new Date(hoy);
-        inicioSemana.setDate(hoy.getDate() - hoy.getDay()); // Domingo de esta semana
-        inicioSemana.setHours(0, 0, 0, 0);
-        
-        const finSemana = new Date(inicioSemana);
-        finSemana.setDate(inicioSemana.getDate() + 6); // Sábado de esta semana
-        finSemana.setHours(23, 59, 59, 999);
-        
-        fechaInicio = inicioSemana;
-        fechaFin = finSemana;
-        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
-        break;
-
-      case 'mes':
-        const añoMes = fecha ? new Date(fecha) : new Date();
-        const año = añoMes.getFullYear();
-        const mes = añoMes.getMonth();
-        
-        fechaInicio = new Date(año, mes, 1);
-        fechaFin = new Date(año, mes + 1, 0, 23, 59, 59, 999);
-        
-        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
-        break;
-
-      case 'año':
-        const añoConsulta = fecha ? new Date(fecha).getFullYear() : new Date().getFullYear();
-        
-        fechaInicio = new Date(añoConsulta, 0, 1); // 1 de Enero
-        fechaFin = new Date(añoConsulta, 11, 31, 23, 59, 59, 999); // 31 de Diciembre
-        
-        whereClause = `WHERE v.Fecha_Registro BETWEEN @fechaInicio AND @fechaFin`;
-        break;
-
-      default:
-        return res.status(400).json({ 
-          error: "Período no válido. Use: dia, semana, mes, año" 
-        });
-    }
-
-    const sqlQuery = `
-      SELECT 
-        v.ID_Venta,
-        v.ID_Pedido,
-        v.Tipo_Venta,
-        v.Fecha_Registro,
-        c.Nombre AS Cliente_Nombre,
-        p.Estado_P,
-        v.Metodo_Pago,
-        v.Lugar_Emision,
-        v.IGV,
-        v.Total,
-        v.Monto_Recibido,
-        v.Vuelto,
-        -- 🔹 ACTUALIZADO: Incluir información de productos Y combos
-        STRING_AGG(
-          CASE 
-            WHEN pd.ID_Combo IS NOT NULL AND pd.ID_Combo > 0 THEN 
-              CONCAT(cm.Nombre, ' (Combo) x ', pd.Cantidad)
-            ELSE 
-              CONCAT(pr.Nombre, ' (', t.Tamano, ') x ', pd.Cantidad)
-          END, 
-          ', '
-        ) WITHIN GROUP (ORDER BY pd.ID_Pedido_D) AS Detalles_Pedido
-      FROM Ventas v
-      INNER JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
-      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
-      LEFT JOIN Pedido_Detalle pd ON p.ID_Pedido = pd.ID_Pedido
-      -- 🔹 ACTUALIZADO: LEFT JOIN para productos
-      LEFT JOIN Producto_Tamano pt ON pd.ID_Producto_T = pt.ID_Producto_T
-      LEFT JOIN Producto pr ON pt.ID_Producto = pr.ID_Producto
-      LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      -- 🔹 NUEVO: LEFT JOIN para combos
-      LEFT JOIN Combos cm ON pd.ID_Combo = cm.ID_Combo
-      ${whereClause}
-      GROUP BY 
-        v.ID_Venta, v.ID_Pedido, v.Tipo_Venta, v.Fecha_Registro,
-        c.Nombre, p.Estado_P, v.Metodo_Pago, v.Lugar_Emision, 
-        v.IGV, v.Total, v.Monto_Recibido, v.Vuelto
+    const result = await pool.request().query(`
+      SELECT v.*, c.Nombre as Cliente FROM Ventas v
+      JOIN Pedido p ON v.ID_Pedido = p.ID_Pedido
+      JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+      WHERE ${filter}
       ORDER BY v.Fecha_Registro DESC
-    `;
+    `);
 
-    const request = pool.request();
-    
-    if (whereClause) {
-      request.input("fechaInicio", sql.DateTime, fechaInicio);
-      request.input("fechaFin", sql.DateTime, fechaFin);
-    }
-
-    const result = await request.query(sqlQuery);
-
-    const ventas = (result.recordset || []).map(r => ({
-      ID_Venta: r.ID_Venta,
-      ID_Pedido: r.ID_Pedido,
-      Tipo_Venta: r.Tipo_Venta,
-      Fecha_Registro: r.Fecha_Registro,
-      Cliente_Nombre: r.Cliente_Nombre,
-      Estado_Pedido: r.Estado_P,
-      Metodo_Pago: r.Metodo_Pago,
-      Lugar_Emision: r.Lugar_Emision,
-      IGV: r.IGV,
-      Total: r.Total,
-      Monto_Recibido: r.Monto_Recibido,
-      Vuelto: r.Vuelto,
-      Detalles_Pedido: r.Detalles_Pedido || ""
-    }));
-
-    // Calcular estadísticas del período
-    const estadisticas = {
-      periodo: periodo.toLowerCase(),
-      fechaConsulta: fecha || 'actual',
-      totalVentas: ventas.length,
-      totalIngresos: ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0),
-      promedioVenta: ventas.length > 0 ? 
-        ventas.reduce((sum, venta) => sum + (Number(venta.Total) || 0), 0) / ventas.length : 0,
-      fechaInicio: fechaInicio.toISOString(),
-      fechaFin: fechaFin.toISOString()
-    };
-
-    res.status(200).json({
-      ventas,
-      estadisticas
-    });
-
+    res.status(200).json(result.recordset);
   } catch (err) {
-    console.error("getVentasPorPeriodo error:", err);
-    res.status(500).json({ error: "Error al obtener las ventas por período" });
+    res.status(500).json({ error: "Error al filtrar ventas" });
   }
 };
 
 // ==============================
-// 🔹 Estadísticas de ventas (resumen general)
+// 🔹 Estadísticas (RECUPERADO Y ADAPTADO)
 // ==============================
 exports.getEstadisticasVentas = async (req, res) => {
   try {
     const pool = await getConnection();
     
-    // Estadísticas del día
+    // 1. Totales Hoy
     const hoy = await pool.request().query(`
-      SELECT 
-        COUNT(*) as totalVentasHoy,
-        COALESCE(SUM(Total), 0) as ingresosHoy
-      FROM Ventas 
-      WHERE CAST(Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+      SELECT COUNT(*) as total, ISNULL(SUM(Total),0) as ingresos 
+      FROM Ventas WHERE CAST(Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
     `);
 
-    // Estadísticas de la semana
-    const semana = await pool.request().query(`
-      SELECT 
-        COUNT(*) as totalVentasSemana,
-        COALESCE(SUM(Total), 0) as ingresosSemana
-      FROM Ventas 
-      WHERE Fecha_Registro >= DATEADD(day, 1-DATEPART(weekday, GETDATE()), CAST(GETDATE() AS DATE))
-        AND Fecha_Registro < DATEADD(day, 8-DATEPART(weekday, GETDATE()), CAST(GETDATE() AS DATE))
-    `);
-
-    // Estadísticas del mes
+    // 2. Totales Mes
     const mes = await pool.request().query(`
-      SELECT 
-        COUNT(*) as totalVentasMes,
-        COALESCE(SUM(Total), 0) as ingresosMes
-      FROM Ventas 
-      WHERE MONTH(Fecha_Registro) = MONTH(GETDATE()) 
-        AND YEAR(Fecha_Registro) = YEAR(GETDATE())
+      SELECT COUNT(*) as total, ISNULL(SUM(Total),0) as ingresos 
+      FROM Ventas WHERE MONTH(Fecha_Registro) = MONTH(GETDATE()) AND YEAR(Fecha_Registro) = YEAR(GETDATE())
     `);
 
-    // Métodos de pago más usados
-    const metodosPago = await pool.request().query(`
-      SELECT 
-        Metodo_Pago,
-        COUNT(*) as cantidad,
-        SUM(Total) as total
-      FROM Ventas
-      WHERE CAST(Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
-      GROUP BY Metodo_Pago
-      ORDER BY cantidad DESC
+    // 3. Métodos de Pago (Adaptado a Tabla Normalizada)
+    const metodos = await pool.request().query(`
+      SELECT tp.Nombre as Metodo, COUNT(*) as Cantidad, SUM(v.Total) as Total
+      FROM Ventas v
+      JOIN Tipo_Pago tp ON v.ID_Tipo_Pago = tp.ID_Tipo_Pago
+      GROUP BY tp.Nombre
     `);
 
     res.status(200).json({
-      estadisticas: {
-        hoy: {
-          totalVentas: hoy.recordset[0]?.totalVentasHoy || 0,
-          ingresos: Number(hoy.recordset[0]?.ingresosHoy || 0)
-        },
-        semana: {
-          totalVentas: semana.recordset[0]?.totalVentasSemana || 0,
-          ingresos: Number(semana.recordset[0]?.ingresosSemana || 0)
-        },
-        mes: {
-          totalVentas: mes.recordset[0]?.totalVentasMes || 0,
-          ingresos: Number(mes.recordset[0]?.ingresosMes || 0)
-        }
-      },
-      metodosPago: metodosPago.recordset.map(mp => ({
-        metodo: mp.Metodo_Pago,
-        cantidad: mp.cantidad,
-        total: Number(mp.total || 0)
-      }))
+      hoy: hoy.recordset[0],
+      mes: mes.recordset[0],
+      metodos_pago: metodos.recordset
     });
 
   } catch (err) {
-    console.error("getEstadisticasVentas error:", err);
-    res.status(500).json({ error: "Error al obtener las estadísticas de ventas" });
+    res.status(500).json({ error: "Error en estadísticas" });
   }
 };

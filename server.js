@@ -6,7 +6,6 @@ const cors = require("cors");
 const helmet = require("helmet");
 const path = require("path");
 
-// arreglé el nombre del middleware (antes estaba "reteLimit.middleware")
 const rateLimit = require("./middlewares/reteLimit.middleware");
 
 // Rutas
@@ -28,7 +27,8 @@ const combosRoutes = require("./routes/combos.routes");
 const deliveryRoutes = require("./routes/delivery.routes");
 const tamanoRoutes = require("./routes/tamano.routes");
 
-const { asegurarClienteVarios } = require("./controllers/cliente.controller");
+//Para inicializar datos
+const {inicializarTodo} = require("./datos-inicializados");
 
 
 // IMPORT: conexión MSSQL
@@ -125,8 +125,8 @@ process.on("unhandledRejection", (reason) => {
     console.log(`[SERVER] Conexión a la base de datos establecida ✅`);
     app.locals.dbConnected = true;
     
-    // 🔧 INICIALIZAR CLIENTE VARIOS CON ID 1
-    await asegurarClienteVarios();
+    // 🔧 INICIALIZAR Datos
+    await inicializarTodo();
     
   } catch (err) {
     console.error(`[SERVER] No se pudo conectar a la base de datos ❌`);

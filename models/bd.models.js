@@ -15,7 +15,40 @@ const CategoriaInsumos = {
 };
 
 // ===============================
-// 3. PROVEEDOR
+// 3. TIPO DE DOCUMENTO 
+// ===============================
+const TipoDocumento = {
+  ID_Tipo_Doc: 0,
+  Nombre: "",
+  Abreviatura: ""
+};
+
+// ===============================
+// 4. TIPO DE VENTA 
+// ===============================
+const TipoVenta = {
+  ID_Tipo_Venta: 0,
+  Nombre: ""
+};
+
+// ===============================
+// 5. ORIGEN DE VENTA 
+// ===============================
+const OrigenVenta = {
+  ID_Origen_Venta: 0,
+  Nombre: ""
+};
+
+// ===============================
+// 6. TIPO DE PAGO
+// ===============================
+const TipoPago = {
+  ID_Tipo_Pago: 0,
+  Nombre: ""
+};
+
+// ===============================
+// 7. PROVEEDOR
 // ===============================
 const Proveedor = {
   ID_Proveedor: 0,
@@ -30,7 +63,7 @@ const Proveedor = {
 };
 
 // ===============================
-// 4. INSUMOS
+// 8. INSUMOS
 // ===============================
 const Insumo = {
   ID_Insumo: 0,
@@ -45,7 +78,7 @@ const Insumo = {
 };
 
 // ===============================
-// 5. RECETA
+// 9. RECETA
 // ===============================
 const Receta = {
   ID_Receta: 0,
@@ -55,7 +88,7 @@ const Receta = {
 };
 
 // ===============================
-// 6. RECETA DETALLE
+// 10. RECETA DETALLE
 // ===============================
 const RecetaDetalle = {
   ID_Receta_D: 0,
@@ -66,7 +99,7 @@ const RecetaDetalle = {
 };
 
 // ===============================
-// 7. PRODUCTO
+// 11. PRODUCTO
 // ===============================
 const Producto = {
   ID_Producto: 0,
@@ -80,7 +113,7 @@ const Producto = {
 };
 
 // ===============================
-// 8. TAMAÑO
+// 12. TAMAÑO
 // ===============================
 const Tamano = {
   ID_Tamano: 0,
@@ -88,7 +121,7 @@ const Tamano = {
 };
 
 // ===============================
-// 9. PRODUCTO_TAMANO (Nuevo)
+// 13. PRODUCTO_TAMANO
 // ===============================
 const ProductoTamano = {
   ID_Producto_T: 0,
@@ -100,12 +133,12 @@ const ProductoTamano = {
 };
 
 // ===============================
-// 10. STOCK
+// 14. STOCK
 // ===============================
 const Stock = {
   ID_Stock: 0,
   ID_Insumo: 0,
-  ID_Proveedor: null, // Cambiado a null para permitir valores nulos
+  ID_Proveedor: null,
   Cantidad_Recibida: 0,
   Costo_Unitario: 0.0,
   Costo_Total: 0.0,
@@ -115,13 +148,13 @@ const Stock = {
 };
 
 // ===============================
-// 11. STOCK MOVIMIENTO
+// 15. STOCK MOVIMIENTO
 // ===============================
 const StockMovimiento = {
   ID_Stock_M: 0,
   ID_Stock: 0,
   Tipo_Mov: "Entrada", // Entrada | Salida | Ajuste
-  Motivo: null, // Cambiado: ahora puede ser null (opcional)
+  Motivo: null,
   Cantidad: 0,
   Stock_ACT: 0,
   Usuario_ID: null,
@@ -129,7 +162,7 @@ const StockMovimiento = {
 };
 
 // ===============================
-// 12. CUPONES
+// 16. CUPONES
 // ===============================
 const Cupon = {
   ID_Cupon: 0,
@@ -147,11 +180,12 @@ const Cupon = {
 };
 
 // ===============================
-// 13. CLIENTE
+// 17. CLIENTE (MODIFICADO)
 // ===============================
 const Cliente = {
   ID_Cliente: 0,
-  DNI: "",
+  ID_Tipo_Doc: null,      
+  Numero_Documento: "",   
   Nombre: "",
   Apellido: "",
   Telefono: "",
@@ -159,7 +193,17 @@ const Cliente = {
 };
 
 // ===============================
-// 14. USUARIO
+// 18. CLIENTE PUNTOS
+// ===============================
+const ClientePuntos = {
+  ID_Puntos: 0,
+  ID_Cliente: 0,
+  Puntos_Acumulados: 0,
+  Fecha_Actualizacion: ""
+};
+
+// ===============================
+// 19. USUARIO
 // ===============================
 const Usuario = {
   ID_Usuario: 0,
@@ -172,22 +216,42 @@ const Usuario = {
 };
 
 // ===============================
-// 15. PEDIDO
+// 20. PEDIDO
 // ===============================
 const Pedido = {
   ID_Pedido: 0,
   ID_Cliente: 0,
-  ID_Usuario: null, // Puede ser null según la BD
+  ID_Usuario: null,
   Notas: "",
   SubTotal: 0.0,
-  Estado_P: "P", //  P=Pendiente, C=Cancelado, E=Entregado
+  Estado_P: "P", // P=Pendiente, C=Cancelado, E=Entregado
   Fecha_Registro: "",
   Hora_Pedido: ""
 };
 
+// ===============================
+// 21. COMBOS
+// ===============================
+const Combo = {
+  ID_Combo: 0,
+  Nombre: "",
+  Descripcion: "",
+  Precio: 0.0,
+  Estado: "A"
+};
 
 // ===============================
-// 16. PEDIDO DETALLE (Actualizado)
+// 22. COMBOS DETALLE
+// ===============================
+const ComboDetalle = {
+  ID_Combo_D: 0,
+  ID_Combo: 0,
+  ID_Producto_T: 0,
+  Cantidad: 1
+};
+
+// ===============================
+// 23. PEDIDO DETALLE
 // ===============================
 const PedidoDetalle = {
   ID_Pedido_D: 0,
@@ -199,7 +263,7 @@ const PedidoDetalle = {
 };
 
 // ===============================
-// 17. USO CUPÓN
+// 24. USO CUPÓN
 // ===============================
 const UsoCupon = {
   ID_Uso_C: 0,
@@ -211,14 +275,14 @@ const UsoCupon = {
 };
 
 // ===============================
-// 18. VENTAS
+// 25. VENTAS (MODIFICADO)
 // ===============================
 const Venta = {
   ID_Venta: 0,
   ID_Pedido: 0,
-  Tipo_Venta: "N", // B=Boleta, F=Factura, N=Nota
-  Metodo_Pago: "B", // E=Efectivo, T=Tarjeta, B=Billetera
-  Lugar_Emision: "B", // A=Tupac, B=Yarina
+  ID_Tipo_Venta: 0,   
+  ID_Origen_Venta: 0, 
+  ID_Tipo_Pago: 0,    
   IGV: 0.0,
   Total: 0.0,
   Monto_Recibido: 0.0,
@@ -227,7 +291,7 @@ const Venta = {
 };
 
 // ===============================
-// 19. DELIVERY
+// 26. DELIVERY
 // ===============================
 const Delivery = {
   ID_Delivery: 0,
@@ -237,32 +301,15 @@ const Delivery = {
 };
 
 // ===============================
-// 20. COMBOS
-// ===============================
-const Combo = {
-  ID_Combo: 0,
-  Nombre: "",
-  Descripcion: "",
-  Precio: 0.0,
-  Estado: "A"
-};
-
-// ===============================
-// 21. COMBOS DETALLE (Actualizado)
-// ===============================
-const ComboDetalle = {
-  ID_Combo_D: 0,
-  ID_Combo: 0,
-  ID_Producto_T: 0,
-  Cantidad: 1
-};
-
-// ===============================
 // EXPORTAR MODELOS
 // ===============================
 module.exports = {
   CategoriaProducto,
   CategoriaInsumos,
+  TipoDocumento,  
+  TipoVenta,      
+  OrigenVenta,    
+  TipoPago,       
   Proveedor,
   Insumo,
   Receta,
@@ -274,6 +321,7 @@ module.exports = {
   StockMovimiento,
   Cupon,
   Cliente,
+  ClientePuntos, 
   Usuario,
   Pedido,
   PedidoDetalle,

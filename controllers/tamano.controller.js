@@ -46,11 +46,7 @@ exports.getTamanoById = async (req, res) => {
     const pool = await getConnection();
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query(`
-        SELECT ID_Tamano, Tamano
-        FROM Tamano
-        WHERE ID_Tamano = @id
-      `);
+      .query(`SELECT ID_Tamano, Tamano FROM Tamano WHERE ID_Tamano = @id`);
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Tamaño no encontrado" });
@@ -64,7 +60,7 @@ exports.getTamanoById = async (req, res) => {
 };
 
 // ==============================
-// 📗 Crear un nuevo tamaño
+// 📗 Crear un nuevo tamaño (MEJORADO: Validación y Retorno Objeto)
 // ==============================
 exports.createTamano = async (req, res) => {
   const { Tamano } = req.body;
@@ -75,6 +71,17 @@ exports.createTamano = async (req, res) => {
     }
 
     const pool = await getConnection();
+
+    // 1. Validar duplicados
+    const existe = await pool.request()
+        .input("Tamano", sql.VarChar(50), Tamano)
+        .query("SELECT ID_Tamano FROM Tamano WHERE Tamano = @Tamano");
+    
+    if (existe.recordset.length > 0) {
+        return res.status(409).json({ error: `El tamaño '${Tamano}' ya existe` });
+    }
+
+    // 2. Insertar y obtener ID
     const result = await pool.request()
       .input("Tamano", sql.VarChar(50), Tamano)
       .query(`
@@ -83,10 +90,17 @@ exports.createTamano = async (req, res) => {
         VALUES (@Tamano)
       `);
 
+    const newId = result.recordset[0].ID_Tamano;
+
+    // 3. Retornar objeto completo (útil para el frontend)
     return res.status(201).json({
       message: "Tamaño registrado correctamente",
-      ID_Tamano: result.recordset[0].ID_Tamano
+      tamano: {
+          ID_Tamano: newId,
+          Tamano: Tamano
+      }
     });
+
   } catch (err) {
     console.error("createTamano error:", err);
     return res.status(500).json({ error: "Error al registrar el tamaño" });
@@ -101,19 +115,27 @@ exports.updateTamano = async (req, res) => {
   const { Tamano } = req.body;
 
   try {
-    if (Tamano === undefined) {
-      return res.status(400).json({ error: "No se proporcionaron campos para actualizar" });
+    if (!Tamano) {
+      return res.status(400).json({ error: "El campo 'Tamano' es obligatorio" });
     }
 
     const pool = await getConnection();
+
+    // 1. Validar duplicados en actualización
+    const existe = await pool.request()
+        .input("Tamano", sql.VarChar(50), Tamano)
+        .input("id", sql.Int, id)
+        .query("SELECT ID_Tamano FROM Tamano WHERE Tamano = @Tamano AND ID_Tamano <> @id");
+    
+    if (existe.recordset.length > 0) {
+        return res.status(409).json({ error: `Ya existe otro tamaño llamado '${Tamano}'` });
+    }
+
+    // 2. Actualizar
     const result = await pool.request()
       .input("id", sql.Int, id)
       .input("Tamano", sql.VarChar(50), Tamano)
-      .query(`
-        UPDATE Tamano
-        SET Tamano = @Tamano
-        WHERE ID_Tamano = @id
-      `);
+      .query(`UPDATE Tamano SET Tamano = @Tamano WHERE ID_Tamano = @id`);
 
     if (result.rowsAffected[0] === 0) {
       return res.status(404).json({ error: "Tamaño no encontrado" });
@@ -127,7 +149,7 @@ exports.updateTamano = async (req, res) => {
 };
 
 // ==============================
-// 📕 Eliminar un tamaño (Versión Mejorada)
+// 📕 Eliminar un tamaño (MEJORADO: Check Dependencias)
 // ==============================
 exports.deleteTamano = async (req, res) => {
   const { id } = req.params;
@@ -135,18 +157,18 @@ exports.deleteTamano = async (req, res) => {
   try {
     const pool = await getConnection();
 
-    // Verificar si hay productos asociados en Producto_Tamano
+    // 1. Verificar si hay productos asociados en Producto_Tamano
     const productosResult = await pool.request()
       .input("id", sql.Int, id)
       .query("SELECT COUNT(*) as count FROM Producto_Tamano WHERE ID_Tamano = @id");
     
     if (productosResult.recordset[0].count > 0) {
       return res.status(400).json({ 
-        error: "No se puede eliminar el tamaño porque tiene productos asociados. Elimine o reassigne los productos primero." 
+        error: "No se puede eliminar: Este tamaño está asignado a uno o más productos." 
       });
     }
 
-    // Si no hay productos asociados, proceder con la eliminación
+    // 2. Eliminar
     const result = await pool.request()
       .input("id", sql.Int, id)
       .query("DELETE FROM Tamano WHERE ID_Tamano = @id");
@@ -159,10 +181,10 @@ exports.deleteTamano = async (req, res) => {
   } catch (err) {
     console.error("deleteTamano error:", err);
     
-    // Manejar otros errores de base de datos
+    // Manejar error de FK (por si acaso se nos pasó alguna tabla)
     if (err.number === 547) {
       return res.status(400).json({ 
-        error: "No se puede eliminar el tamaño porque está siendo utilizado por productos en el sistema." 
+        error: "No se puede eliminar el tamaño porque tiene dependencias en el sistema." 
       });
     }
     

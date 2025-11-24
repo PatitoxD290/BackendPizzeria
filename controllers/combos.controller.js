@@ -1,571 +1,523 @@
 const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
 const path = require("path");
-const fs = require("fs");
+const fs = require("fs").promises; 
+const fsSync = require("fs"); 
 
 // Carpeta de uploads
 const uploadDir = path.join(__dirname, "..", "uploads");
 
-// ==============================
-// 🔄 Función para eliminar imágenes antiguas de un combo
-// ==============================
-function eliminarImagenesCombo(idCombo) {
-  const files = fs.readdirSync(uploadDir);
-  files.forEach((file) => {
-    if (file.startsWith(`combo_${idCombo}_`)) {
-      const filePath = path.join(uploadDir, file);
-      try {
-        fs.unlinkSync(filePath);
-        console.log(`Archivo eliminado: ${file}`);
-      } catch (err) {
-        console.error(`Error eliminando archivo ${file}:`, err);
-      }
+// Asegurar que la carpeta exista
+if (!fsSync.existsSync(uploadDir)) {
+    fsSync.mkdirSync(uploadDir, { recursive: true });
+}
+
+// ==================================================
+// 🕵️ FUNCIÓN CLAVE: Verificar Stock Matemático (Stock < Cantidad Requerida)
+// ==================================================
+async function actualizarDisponibilidadCombo(pool, idCombo) {
+    try {
+        // Verificamos si existe ALGÚN ítem en el combo cuyo stock sea menor al necesario
+        const checkStock = await pool.request()
+            .input("ID_Combo", sql.Int, idCombo)
+            .query(`
+                SELECT COUNT(*) as ProductosInsuficientes
+                FROM Combos_Detalle cd
+                INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
+                INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+                WHERE cd.ID_Combo = @ID_Combo 
+                AND p.Cantidad_Disponible < cd.Cantidad -- <--- VALIDACIÓN EXACTA
+            `);
+
+        const hayFaltantes = checkStock.recordset[0].ProductosInsuficientes > 0;
+
+        if (hayFaltantes) {
+            // Si falta aunque sea 1 ingrediente, desactivamos
+            await pool.request()
+                .input("ID_Combo", sql.Int, idCombo)
+                .query("UPDATE Combos SET Estado = 'I' WHERE ID_Combo = @ID_Combo AND Estado = 'A'");
+        } else {
+            // Si NO hay faltantes (todo alcanza), activamos
+            await pool.request()
+                .input("ID_Combo", sql.Int, idCombo)
+                .query("UPDATE Combos SET Estado = 'A' WHERE ID_Combo = @ID_Combo AND Estado = 'I'");
+        }
+        
+    } catch (err) {
+        console.error(`Error verificando stock del combo ${idCombo}:`, err);
     }
-  });
 }
 
 // ==============================
-// 🔄 Mapper: adapta una fila SQL al modelo Combo
+// 🔄 Helper: Obtener URLs de imágenes
+// ==============================
+async function getImagenesCombo(idCombo) {
+    try {
+        const files = await fs.readdir(uploadDir);
+        return files
+            .filter(file => file.startsWith(`combo_${idCombo}_`))
+            .map(file => `/uploads/${file}`); 
+    } catch (err) {
+        return [];
+    }
+}
+
+// ==============================
+// 🔄 Función para eliminar imágenes
+// ==============================
+async function eliminarImagenesCombo(idCombo) {
+    try {
+        const files = await fs.readdir(uploadDir);
+        const deletePromises = files
+            .filter(file => file.startsWith(`combo_${idCombo}_`))
+            .map(file => fs.unlink(path.join(uploadDir, file)));
+        await Promise.all(deletePromises);
+    } catch (err) {
+        console.error(`Error eliminando imágenes combo ${idCombo}:`, err);
+    }
+}
+
+// ==============================
+// 🔄 Mappers
 // ==============================
 function mapToCombo(row = {}) {
-  const template = bdModel?.Combo || {
-    ID_Combo: 0,
-    Nombre: "",
-    Descripcion: "",
-    Precio: 0.0,
-    Estado: "A"
-  };
-
-  return {
-    ...template,
-    ID_Combo: row.ID_Combo ?? template.ID_Combo,
-    Nombre: row.Nombre ?? template.Nombre,
-    Descripcion: row.Descripcion ?? template.Descripcion,
-    Precio: row.Precio ?? template.Precio,
-    Estado: row.Estado ?? template.Estado
-  };
+    return {
+        ID_Combo: row.ID_Combo || 0,
+        Nombre: row.Nombre || "",
+        Descripcion: row.Descripcion || "",
+        Precio: row.Precio || 0.0,
+        Estado: row.Estado || "A"
+    };
 }
 
-// ==============================
-// 🔄 Mapper ComboDetalle para mostrar
-// ==============================
 function mapToComboDetalle(row = {}) {
-  return {
-    ID_Combo_D: row.ID_Combo_D || 0,
-    ID_Combo: row.ID_Combo || 0,
-    ID_Producto_T: row.ID_Producto_T || 0,
-    Cantidad: row.Cantidad ?? 1,
-    Producto_Nombre: row.Producto_Nombre || null,
-    Tamano_Nombre: row.Tamano_Nombre || null
-  };
+    return {
+        ID_Combo_D: row.ID_Combo_D || 0,
+        ID_Combo: row.ID_Combo || 0,
+        ID_Producto_T: row.ID_Producto_T || 0,
+        Cantidad: row.Cantidad ?? 1,
+        Producto_Nombre: row.Producto_Nombre || null,
+        Tamano_Nombre: row.Tamano_Nombre || null
+    };
 }
 
 // ==================================================
-// 📘 GET /combos - Obtener todos los combos con detalles
+// 📘 GET /combos - Obtener todos (Con Barrido Masivo de Stock)
 // ==================================================
 exports.getCombos = async (_req, res) => {
-  try {
-    const pool = await getConnection();
+    try {
+        const pool = await getConnection();
 
-    const combosRes = await pool.request().query("SELECT * FROM Combos ORDER BY ID_Combo DESC");
-    const combos = combosRes.recordset || [];
+        // 1. DESACTIVAR MASIVAMENTE: Combos donde algún producto no alcance
+        await pool.request().query(`
+            UPDATE Combos
+            SET Estado = 'I'
+            WHERE ID_Combo IN (
+                SELECT cd.ID_Combo
+                FROM Combos_Detalle cd
+                INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
+                INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+                WHERE p.Cantidad_Disponible < cd.Cantidad -- <--- SI STOCK < NECESARIO
+            ) AND Estado = 'A'
+        `);
 
-    if (combos.length === 0) return res.status(200).json([]);
+        // 2. REACTIVAR MASIVAMENTE: Combos que estaban inactivos pero ya tienen stock
+        await pool.request().query(`
+            UPDATE Combos
+            SET Estado = 'A'
+            WHERE Estado = 'I' 
+            AND ID_Combo NOT IN (
+                SELECT cd.ID_Combo
+                FROM Combos_Detalle cd
+                INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
+                INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+                WHERE p.Cantidad_Disponible < cd.Cantidad
+            )
+        `);
 
-    const comboIds = combos.map(c => c.ID_Combo).join(",");
+        // 3. Obtener lista final
+        const combosRes = await pool.request().query("SELECT * FROM Combos ORDER BY ID_Combo DESC");
+        const combos = combosRes.recordset || [];
 
-    const detallesQuery = `
-      SELECT cd.ID_Combo_D, cd.ID_Combo, cd.ID_Producto_T, cd.Cantidad,
-             p.Nombre AS Producto_Nombre,
-             t.Tamano AS Tamano_Nombre
-      FROM Combos_Detalle cd
-      INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
-      INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-      INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      WHERE cd.ID_Combo IN (${comboIds})
-      ORDER BY cd.ID_Combo, cd.ID_Combo_D
-    `;
+        if (combos.length === 0) return res.status(200).json([]);
 
-    const detallesRes = await pool.request().query(detallesQuery);
-    const detallesRows = detallesRes.recordset || [];
+        // 4. Obtener detalles
+        const comboIds = combos.map(c => c.ID_Combo).join(",");
+        const detallesQuery = `
+            SELECT cd.ID_Combo_D, cd.ID_Combo, cd.ID_Producto_T, cd.Cantidad,
+                   p.Nombre AS Producto_Nombre, t.Tamano AS Tamano_Nombre
+            FROM Combos_Detalle cd
+            INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
+            INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+            INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+            WHERE cd.ID_Combo IN (${comboIds})
+            ORDER BY cd.ID_Combo, cd.ID_Combo_D
+        `;
 
-    const detallesPorCombo = detallesRows.reduce((acc, r) => {
-      const id = r.ID_Combo;
-      if (!acc[id]) acc[id] = [];
-      acc[id].push(mapToComboDetalle(r));
-      return acc;
-    }, {});
+        const detallesRes = await pool.request().query(detallesQuery);
+        const detallesPorCombo = detallesRes.recordset.reduce((acc, r) => {
+            if (!acc[r.ID_Combo]) acc[r.ID_Combo] = [];
+            acc[r.ID_Combo].push(mapToComboDetalle(r));
+            return acc;
+        }, {});
 
-    const resultado = combos.map(c => ({
-      ...mapToCombo(c),
-      detalles: detallesPorCombo[c.ID_Combo] || []
-    }));
+        // 5. Respuesta con imágenes
+        const resultado = await Promise.all(combos.map(async (c) => {
+            const imgs = await getImagenesCombo(c.ID_Combo);
+            return {
+                ...mapToCombo(c),
+                detalles: detallesPorCombo[c.ID_Combo] || [],
+                imagenes: imgs
+            };
+        }));
 
-    return res.status(200).json(resultado);
-  } catch (err) {
-    console.error("getCombos error:", err);
-    return res.status(500).json({ error: "Error al obtener los combos" });
-  }
+        return res.status(200).json(resultado);
+    } catch (err) {
+        console.error("getCombos error:", err);
+        return res.status(500).json({ error: "Error al obtener los combos" });
+    }
 };
 
 // ==================================================
-// 📘 GET /combos/:id - Obtener un combo por ID con detalles
+// 📘 GET /combos/:id - Obtener uno (Verificación Individual)
 // ==================================================
 exports.getComboById = async (req, res) => {
-  const { id } = req.params;
-  try {
-    const pool = await getConnection();
+    const { id } = req.params;
+    try {
+        const pool = await getConnection();
 
-    const comboRes = await pool.request()
-      .input("id", sql.Int, id)
-      .query("SELECT * FROM Combos WHERE ID_Combo = @id");
+        // Verificar stock antes de responder
+        await actualizarDisponibilidadCombo(pool, id);
 
-    if (!comboRes.recordset.length)
-      return res.status(404).json({ error: "Combo no encontrado" });
+        const comboRes = await pool.request()
+            .input("id", sql.Int, id)
+            .query("SELECT * FROM Combos WHERE ID_Combo = @id");
 
-    const combo = mapToCombo(comboRes.recordset[0]);
+        if (!comboRes.recordset.length) return res.status(404).json({ error: "Combo no encontrado" });
 
-    const detallesRes = await pool.request()
-      .input("id", sql.Int, id)
-      .query(`
-        SELECT cd.ID_Combo_D, cd.ID_Combo, cd.ID_Producto_T, cd.Cantidad,
-               p.Nombre AS Producto_Nombre,
-               t.Tamano AS Tamano_Nombre
-        FROM Combos_Detalle cd
-        INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
-        INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-        INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-        WHERE cd.ID_Combo = @id
-        ORDER BY cd.ID_Combo_D
-      `);
+        const combo = mapToCombo(comboRes.recordset[0]);
+        const detalles = await obtenerDetallesCompletos(id, pool);
+        const imagenes = await getImagenesCombo(id);
 
-    const detalles = detallesRes.recordset.map(mapToComboDetalle);
+        return res.status(200).json({ ...combo, detalles, imagenes });
 
-    return res.status(200).json({ ...combo, detalles });
-
-  } catch (err) {
-    console.error("getComboById error:", err);
-    return res.status(500).json({ error: "Error al obtener el combo" });
-  }
+    } catch (err) {
+        console.error("getComboById error:", err);
+        return res.status(500).json({ error: "Error al obtener el combo" });
+    }
 };
 
 // ==================================================
-// 📗 POST /combos - CREAR COMBO CON DETALLES Y MANEJO DE IMÁGENES (CORREGIDO)
+// 📗 POST /combos
 // ==================================================
 exports.createCombo = async (req, res) => {
-  let { ID_Combo, Nombre, Descripcion, Precio, Estado, detalles } = req.body;
+    let { Nombre, Descripcion, Precio, Estado, detalles } = req.body;
 
-  // ✅ CORREGIDO: Parsear detalles si viene como string (desde FormData)
-  if (detalles && typeof detalles === 'string') {
-    try {
-      detalles = JSON.parse(detalles);
-      console.log('✅ Detalles parseados desde string:', detalles);
-    } catch (parseError) {
-      console.error('❌ Error parseando detalles:', parseError);
-      return res.status(400).json({ 
-        error: "Formato inválido en los detalles del combo" 
-      });
+    if (detalles && typeof detalles === 'string') {
+        try { detalles = JSON.parse(detalles); } catch (e) { return res.status(400).json({ error: "JSON inválido" }); }
     }
-  }
 
-  // Validaciones básicas
-  if (!Nombre || !Precio) {
-    return res.status(400).json({ 
-      error: "Faltan campos obligatorios: Nombre y Precio" 
-    });
-  }
-
-  if (!Array.isArray(detalles) || detalles.length === 0) {
-    console.log('❌ Detalles no es array o está vacío:', detalles);
-    return res.status(400).json({ 
-      error: "Debe incluir al menos un detalle de combo" 
-    });
-  }
-
-  // Validar cada detalle
-  for (const detalle of detalles) {
-    if (!detalle.ID_Producto_T || !detalle.Cantidad) {
-      console.log('❌ Detalle inválido:', detalle);
-      return res.status(400).json({ 
-        error: "Cada detalle debe tener ID_Producto_T y Cantidad" 
-      });
+    if (!Nombre || !Precio || !Array.isArray(detalles) || detalles.length === 0) {
+        return res.status(400).json({ error: "Faltan datos o detalles" });
     }
-  }
 
-  console.log('✅ Datos recibidos para crear combo:');
-  console.log('- Nombre:', Nombre);
-  console.log('- Precio:', Precio);
-  console.log('- Estado:', Estado);
-  console.log('- Número de detalles:', detalles.length);
-  console.log('- Detalles:', detalles);
-
-  let transaction;
-  try {
-    const pool = await getConnection();
-    transaction = new sql.Transaction(pool);
-    
-    await transaction.begin();
-
+    let transaction;
     try {
-      // 1. CREAR EL COMBO PRINCIPAL
-      const comboResult = await new sql.Request(transaction)
-        .input("Nombre", sql.VarChar, Nombre)
-        .input("Descripcion", sql.VarChar, Descripcion || "")
-        .input("Precio", sql.Decimal(10, 2), Precio)
-        .input("Estado", sql.Char(1), Estado || "A")
-        .query(`
-          INSERT INTO Combos (Nombre, Descripcion, Precio, Estado)
-          OUTPUT INSERTED.ID_Combo, INSERTED.Nombre, INSERTED.Descripcion, 
-                 INSERTED.Precio, INSERTED.Estado
-          VALUES (@Nombre, @Descripcion, @Precio, @Estado)
-        `);
+        const pool = await getConnection();
+        transaction = new sql.Transaction(pool);
+        await transaction.begin();
 
-      const nuevoCombo = mapToCombo(comboResult.recordset[0]);
-      const ID_Combo = nuevoCombo.ID_Combo;
+        // 1. Insertar Combo
+        const comboResult = await new sql.Request(transaction)
+            .input("Nombre", sql.VarChar, Nombre)
+            .input("Descripcion", sql.VarChar, Descripcion || "")
+            .input("Precio", sql.Decimal(10, 2), Precio)
+            .input("Estado", sql.Char(1), Estado || "A")
+            .query(`
+                INSERT INTO Combos (Nombre, Descripcion, Precio, Estado)
+                OUTPUT INSERTED.ID_Combo
+                VALUES (@Nombre, @Descripcion, @Precio, @Estado)
+            `);
+        const ID_Combo = comboResult.recordset[0].ID_Combo;
 
-      console.log('✅ Combo creado con ID:', ID_Combo);
-
-      // 2. CREAR LOS DETALLES DEL COMBO
-      for (const detalle of detalles) {
-        console.log('✅ Insertando detalle:', detalle);
-        await new sql.Request(transaction)
-          .input("ID_Combo", sql.Int, ID_Combo)
-          .input("ID_Producto_T", sql.Int, detalle.ID_Producto_T)
-          .input("Cantidad", sql.Int, detalle.Cantidad)
-          .query(`
-            INSERT INTO Combos_Detalle (ID_Combo, ID_Producto_T, Cantidad)
-            VALUES (@ID_Combo, @ID_Producto_T, @Cantidad)
-          `);
-      }
-
-      console.log('✅ Todos los detalles insertados');
-
-      // 3. MANEJO DE IMÁGENES
-      const archivosRenombrados = [];
-      if (req.files && req.files.length > 0) {
-        console.log('✅ Procesando archivos:', req.files.length);
-        for (let i = 0; i < req.files.length; i++) {
-          const file = req.files[i];
-          const extension = path.extname(file.originalname);
-          const nuevoNombre = `combo_${ID_Combo}_${i + 1}${extension}`;
-          console.log('✅ Renombrando archivo a:', nuevoNombre);
-          fs.renameSync(
-            path.join(file.destination, file.filename),
-            path.join(file.destination, nuevoNombre)
-          );
-          archivosRenombrados.push(nuevoNombre);
+        // 2. Insertar Detalles
+        for (const d of detalles) {
+            await new sql.Request(transaction)
+                .input("ID_Combo", sql.Int, ID_Combo)
+                .input("ID_Producto_T", sql.Int, d.ID_Producto_T)
+                .input("Cantidad", sql.Int, d.Cantidad)
+                .query("INSERT INTO Combos_Detalle (ID_Combo, ID_Producto_T, Cantidad) VALUES (@ID_Combo, @ID_Producto_T, @Cantidad)");
         }
-      }
 
-      // 4. CONFIRMAR LA TRANSACCIÓN
-      await transaction.commit();
-      console.log('✅ Transacción completada');
+        // 3. Imágenes
+        if (req.files && req.files.length > 0) {
+            const movePromises = req.files.map(async (file, i) => {
+                const ext = path.extname(file.originalname);
+                const nuevoNombre = `combo_${ID_Combo}_${i + 1}${ext}`;
+                await fs.rename(file.path, path.join(uploadDir, nuevoNombre));
+            });
+            await Promise.all(movePromises);
+        }
 
-      // 5. OBTENER INFORMACIÓN COMPLETA DE LOS DETALLES
-      const detallesCompletos = await obtenerDetallesCompletos(ID_Combo, pool);
+        await transaction.commit();
 
-      // 6. RESPONDER CON EL COMBO COMPLETO CREADO
-      return res.status(201).json({
-        message: "Combo creado correctamente con sus detalles",
-        combo: {
-          ...nuevoCombo,
-          detalles: detallesCompletos
-        },
-        archivos_subidos: archivosRenombrados.length,
-        nombres_archivos: archivosRenombrados
-      });
+        // 4. Verificar disponibilidad inmediata
+        await actualizarDisponibilidadCombo(pool, ID_Combo);
 
-    } catch (error) {
-      // Si algo falla, revertir la transacción
-      console.error('❌ Error en transacción:', error);
-      if (transaction) {
-        await transaction.rollback();
-        console.log('✅ Transacción revertida');
-      }
-      throw error;
+        // 5. Respuesta
+        const comboFinal = await pool.request().input("id", sql.Int, ID_Combo).query("SELECT * FROM Combos WHERE ID_Combo = @id");
+        const fullDetails = await obtenerDetallesCompletos(ID_Combo, pool);
+        const imagenesUrls = await getImagenesCombo(ID_Combo);
+
+        return res.status(201).json({
+            message: "Combo creado correctamente",
+            combo: { ...mapToCombo(comboFinal.recordset[0]), detalles: fullDetails, imagenes: imagenesUrls }
+        });
+
+    } catch (err) {
+        if (transaction) await transaction.rollback();
+        console.error("createCombo error:", err);
+        return res.status(500).json({ error: "Error creando combo" });
     }
-
-  } catch (err) {
-    console.error("createCombo error:", err);
-    return res.status(500).json({ 
-      error: "Error al crear el combo con sus detalles",
-      details: err.message 
-    });
-  }
 };
 
 // ==================================================
-// 📙 PUT /combos/:id - ACTUALIZAR COMBO, DETALLES E IMÁGENES (CORREGIDO)
+// 📙 PUT /combos/:id
 // ==================================================
 exports.updateCombo = async (req, res) => {
-  const { id } = req.params;
-  let { Nombre, Descripcion, Precio, Estado, detalles } = req.body;
+    const { id } = req.params;
+    let { Nombre, Descripcion, Precio, Estado, detalles } = req.body;
 
-  // ✅ CORREGIDO: Parsear detalles si viene como string (desde FormData)
-  if (detalles && typeof detalles === 'string') {
-    try {
-      detalles = JSON.parse(detalles);
-      console.log('✅ Detalles parseados desde string:', detalles);
-    } catch (parseError) {
-      console.error('❌ Error parseando detalles:', parseError);
-      return res.status(400).json({ 
-        error: "Formato inválido en los detalles del combo" 
-      });
+    if (detalles && typeof detalles === 'string') {
+        try { detalles = JSON.parse(detalles); } catch (e) { }
     }
-  }
 
-  let transaction;
-  try {
-    const pool = await getConnection();
-    transaction = new sql.Transaction(pool);
-    await transaction.begin();
-
+    let transaction;
     try {
-      // 1. VERIFICAR QUE EL COMBO EXISTE
-      const comboExistente = await transaction.request()
-        .input("id", sql.Int, id)
-        .query("SELECT ID_Combo FROM Combos WHERE ID_Combo = @id");
-
-      if (!comboExistente.recordset.length) {
-        await transaction.rollback();
-        return res.status(404).json({ error: "Combo no encontrado" });
-      }
-
-      // 2. ACTUALIZAR EL COMBO
-      const updateParts = [];
-      const requestUpdate = transaction.request().input("id", sql.Int, id);
-
-      if (Nombre !== undefined) {
-        updateParts.push("Nombre = @Nombre");
-        requestUpdate.input("Nombre", sql.VarChar, Nombre);
-      }
-      if (Descripcion !== undefined) {
-        updateParts.push("Descripcion = @Descripcion");
-        requestUpdate.input("Descripcion", sql.VarChar, Descripcion);
-      }
-      if (Precio !== undefined) {
-        updateParts.push("Precio = @Precio");
-        requestUpdate.input("Precio", sql.Decimal(10, 2), Precio);
-      }
-      if (Estado !== undefined) {
-        updateParts.push("Estado = @Estado");
-        requestUpdate.input("Estado", sql.Char(1), Estado);
-      }
-
-      if (updateParts.length > 0) {
-        await requestUpdate.query(`
-          UPDATE Combos 
-          SET ${updateParts.join(", ")} 
-          WHERE ID_Combo = @id
-        `);
-      }
-
-      // 3. ACTUALIZAR DETALLES (si se proporcionan)
-      if (Array.isArray(detalles)) {
-        // Validar detalles
-        for (const detalle of detalles) {
-          if (!detalle.ID_Producto_T || detalle.Cantidad == null) {
-            await transaction.rollback();
-            return res.status(400).json({ 
-              error: "Cada detalle debe tener ID_Producto_T y Cantidad" 
-            });
-          }
-        }
-
-        // Eliminar detalles existentes
-        await transaction.request()
-          .input("id", sql.Int, id)
-          .query("DELETE FROM Combos_Detalle WHERE ID_Combo = @id");
-
-        // Insertar nuevos detalles
-        for (const detalle of detalles) {
-          await transaction.request()
-            .input("ID_Combo", sql.Int, id)
-            .input("ID_Producto_T", sql.Int, detalle.ID_Producto_T)
-            .input("Cantidad", sql.Int, detalle.Cantidad)
-            .query(`
-              INSERT INTO Combos_Detalle (ID_Combo, ID_Producto_T, Cantidad)
-              VALUES (@ID_Combo, @ID_Producto_T, @Cantidad)
-            `);
-        }
-      }
-
-      // 4. MANEJO DE IMÁGENES
-      const archivosRenombrados = [];
-      if (req.files && req.files.length > 0) {
-        // Eliminar imágenes antiguas antes de subir nuevas
-        eliminarImagenesCombo(id);
+        const pool = await getConnection();
         
-        for (let i = 0; i < req.files.length; i++) {
-          const file = req.files[i];
-          const extension = path.extname(file.originalname);
-          const nuevoNombre = `combo_${id}_${i + 1}${extension}`;
-          fs.renameSync(
-            path.join(file.destination, file.filename),
-            path.join(file.destination, nuevoNombre)
-          );
-          archivosRenombrados.push(nuevoNombre);
+        const check = await pool.request().input("id", sql.Int, id).query("SELECT ID_Combo FROM Combos WHERE ID_Combo = @id");
+        if (!check.recordset.length) return res.status(404).json({ error: "Combo no encontrado" });
+
+        transaction = new sql.Transaction(pool);
+        await transaction.begin();
+
+        // 1. Update Combo
+        const request = transaction.request().input("id", sql.Int, id);
+        let updates = [];
+        if (Nombre !== undefined) { updates.push("Nombre=@Nombre"); request.input("Nombre", sql.VarChar, Nombre); }
+        if (Descripcion !== undefined) { updates.push("Descripcion=@Descripcion"); request.input("Descripcion", sql.VarChar, Descripcion); }
+        if (Precio !== undefined) { updates.push("Precio=@Precio"); request.input("Precio", sql.Decimal(10,2), Precio); }
+        if (Estado !== undefined) { updates.push("Estado=@Estado"); request.input("Estado", sql.Char(1), Estado); }
+
+        if (updates.length > 0) await request.query(`UPDATE Combos SET ${updates.join(",")} WHERE ID_Combo = @id`);
+
+        // 2. Update Detalles
+        if (Array.isArray(detalles) && detalles.length > 0) {
+            await transaction.request().input("id", sql.Int, id).query("DELETE FROM Combos_Detalle WHERE ID_Combo = @id");
+            for (const d of detalles) {
+                await transaction.request()
+                    .input("ID_Combo", sql.Int, id)
+                    .input("ID_Producto_T", sql.Int, d.ID_Producto_T)
+                    .input("Cantidad", sql.Int, d.Cantidad)
+                    .query("INSERT INTO Combos_Detalle (ID_Combo, ID_Producto_T, Cantidad) VALUES (@ID_Combo, @ID_Producto_T, @Cantidad)");
+            }
         }
-      }
 
-      await transaction.commit();
+        // 3. Update Imágenes
+        if (req.files && req.files.length > 0) {
+            await eliminarImagenesCombo(id);
+            const movePromises = req.files.map(async (file, i) => {
+                const ext = path.extname(file.originalname);
+                const nuevoNombre = `combo_${id}_${i + 1}${ext}`;
+                await fs.rename(file.path, path.join(uploadDir, nuevoNombre));
+            });
+            await Promise.all(movePromises);
+        }
 
-      // 5. OBTENER EL COMBO ACTUALIZADO
-      const comboActualizadoRes = await pool.request()
-        .input("id", sql.Int, id)
-        .query("SELECT * FROM Combos WHERE ID_Combo = @id");
+        await transaction.commit();
 
-      const detallesActualizados = await obtenerDetallesCompletos(id, pool);
+        // 4. Verificar disponibilidad
+        await actualizarDisponibilidadCombo(pool, id);
 
-      const comboActualizado = {
-        ...mapToCombo(comboActualizadoRes.recordset[0]),
-        detalles: detallesActualizados
-      };
+        const comboFinal = await pool.request().input("id", sql.Int, id).query("SELECT * FROM Combos WHERE ID_Combo = @id");
+        return res.status(200).json({ 
+            message: "Combo actualizado correctamente",
+            combo: mapToCombo(comboFinal.recordset[0]),
+            imagenes: await getImagenesCombo(id)
+        });
 
-      return res.status(200).json({
-        message: "Combo actualizado correctamente",
-        combo: comboActualizado,
-        archivos_subidos: archivosRenombrados.length,
-        nombres_archivos: archivosRenombrados
-      });
-
-    } catch (error) {
-      if (transaction) {
-        await transaction.rollback();
-      }
-      throw error;
+    } catch (err) {
+        if (transaction) await transaction.rollback();
+        console.error("updateCombo error:", err);
+        return res.status(500).json({ error: "Error actualizando combo" });
     }
-
-  } catch (err) {
-    console.error("updateCombo error:", err);
-    return res.status(500).json({ 
-      error: "Error al actualizar el combo",
-      details: err.message 
-    });
-  }
 };
 
 // ==================================================
-// 📕 DELETE /combos/:id - ELIMINAR COMBO E IMÁGENES
+// 📕 DELETE /combos/:id
 // ==================================================
 exports.deleteCombo = async (req, res) => {
-  const { id } = req.params;
-  let transaction;
-  
-  try {
-    const pool = await getConnection();
-    transaction = new sql.Transaction(pool);
-    await transaction.begin();
-
+    const { id } = req.params;
+    let transaction;
     try {
-      // 1. ELIMINAR IMÁGENES ASOCIADAS
-      eliminarImagenesCombo(id);
+        const pool = await getConnection();
+        transaction = new sql.Transaction(pool);
+        await transaction.begin();
 
-      // 2. ELIMINAR DETALLES PRIMERO (por las claves foráneas)
-      await transaction.request()
-        .input("id", sql.Int, id)
-        .query("DELETE FROM Combos_Detalle WHERE ID_Combo = @id");
+        await transaction.request().input("id", sql.Int, id).query("DELETE FROM Combos_Detalle WHERE ID_Combo = @id");
+        const resDb = await transaction.request().input("id", sql.Int, id).query("DELETE FROM Combos WHERE ID_Combo = @id");
 
-      // 3. ELIMINAR EL COMBO
-      const result = await transaction.request()
-        .input("id", sql.Int, id)
-        .query("DELETE FROM Combos WHERE ID_Combo = @id");
+        if (resDb.rowsAffected[0] === 0) {
+            await transaction.rollback();
+            return res.status(404).json({ error: "Combo no encontrado" });
+        }
 
-      if (result.rowsAffected[0] === 0) {
-        await transaction.rollback();
-        return res.status(404).json({ error: "Combo no encontrado" });
-      }
+        await transaction.commit();
+        await eliminarImagenesCombo(id);
 
-      await transaction.commit();
-      
-      return res.status(200).json({ 
-        message: "Combo, sus detalles e imágenes eliminados correctamente",
-        ID_Combo: parseInt(id)
-      });
+        return res.status(200).json({ message: "Combo eliminado" });
 
-    } catch (error) {
-      if (transaction) {
-        await transaction.rollback();
-      }
-      throw error;
+    } catch (err) {
+        if (transaction) await transaction.rollback();
+        console.error("deleteCombo error:", err);
+        return res.status(500).json({ error: "Error eliminando combo" });
     }
-
-  } catch (err) {
-    console.error("deleteCombo error:", err);
-    return res.status(500).json({ 
-      error: "Error al eliminar el combo",
-      details: err.message 
-    });
-  }
 };
 
 // ==================================================
-// 🔧 FUNCIÓN AUXILIAR - Obtener detalles completos
+// 🔧 Auxiliares
 // ==================================================
 async function obtenerDetallesCompletos(ID_Combo, pool) {
-  const detallesRes = await pool.request()
-    .input("ID_Combo", sql.Int, ID_Combo)
-    .query(`
-      SELECT cd.ID_Combo_D, cd.ID_Combo, cd.ID_Producto_T, cd.Cantidad,
-             p.Nombre AS Producto_Nombre,
-             t.Tamano AS Tamano_Nombre
-      FROM Combos_Detalle cd
-      INNER JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
-      INNER JOIN Producto p ON pt.ID_Producto = p.ID_Producto
-      INNER JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
-      WHERE cd.ID_Combo = @ID_Combo
-      ORDER BY cd.ID_Combo_D
+    const res = await pool.request().input("ID_Combo", sql.Int, ID_Combo).query(`
+        SELECT cd.*, p.Nombre as Producto_Nombre, t.Tamano as Tamano_Nombre
+        FROM Combos_Detalle cd
+        JOIN Producto_Tamano pt ON cd.ID_Producto_T = pt.ID_Producto_T
+        JOIN Producto p ON pt.ID_Producto = p.ID_Producto
+        JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
+        WHERE cd.ID_Combo = @ID_Combo
     `);
-
-  return detallesRes.recordset.map(mapToComboDetalle);
+    return res.recordset.map(mapToComboDetalle);
 }
 
-// ==================================================
-// 🔄 PATCH /combos/:id/status - CAMBIAR ESTADO DEL COMBO (A/I)
-// ==================================================
 exports.statusCombo = async (req, res) => {
+    const { id } = req.params;
+    const { Estado } = req.body;
+    try {
+        const pool = await getConnection();
+        
+        await pool.request().input("id", sql.Int, id).input("Estado", sql.Char(1), Estado)
+            .query("UPDATE Combos SET Estado = @Estado WHERE ID_Combo = @id");
+        
+        // Si intentan activar, verificamos el stock matemático
+        if (Estado === 'A') {
+            await actualizarDisponibilidadCombo(pool, id);
+        }
+
+        // Devolvemos el estado REAL (puede haber cambiado a 'I' si no había stock)
+        const finalState = await pool.request().input("id", sql.Int, id).query("SELECT Estado FROM Combos WHERE ID_Combo = @id");
+        
+        return res.status(200).json({ 
+            message: "Estado procesado",
+            Estado: finalState.recordset[0].Estado
+        });
+
+    } catch (e) { return res.status(500).json({ error: e.message }); }
+};
+// ==================================================
+
+// 🔄 PATCH /combos/:id/status - CAMBIAR ESTADO DEL COMBO (A/I)
+
+// ==================================================
+
+exports.statusCombo = async (req, res) => {
+
   const { id } = req.params;
+
   const { Estado } = req.body;
 
+
+
   // Validar que el estado sea válido
+
   if (!Estado || (Estado !== 'A' && Estado !== 'I')) {
+
     return res.status(400).json({ 
+
       error: "Estado inválido. Debe ser 'A' (Activo) o 'I' (Inactivo)" 
+
     });
+
   }
+
+
 
   try {
+
     const pool = await getConnection();
 
+
+
     // Verificar que el combo existe
+
     const comboExistente = await pool.request()
+
       .input("id", sql.Int, id)
+
       .query("SELECT ID_Combo, Estado FROM Combos WHERE ID_Combo = @id");
 
+
+
     if (!comboExistente.recordset.length) {
+
       return res.status(404).json({ error: "Combo no encontrado" });
+
     }
 
+
+
     // Actualizar solo el estado
+
     await pool.request()
+
       .input("id", sql.Int, id)
+
       .input("Estado", sql.Char(1), Estado)
+
       .query("UPDATE Combos SET Estado = @Estado WHERE ID_Combo = @id");
 
+
+
     const estadoTexto = Estado === 'A' ? 'activado' : 'desactivado';
+
     
+
     return res.status(200).json({ 
+
       message: `Combo ${estadoTexto} correctamente`,
+
       ID_Combo: parseInt(id),
+
       Estado: Estado,
+
       Estado_Texto: Estado === 'A' ? 'Activo' : 'Inactivo'
+
     });
 
+
+
   } catch (err) {
+
     console.error("statusCombo error:", err);
+
     return res.status(500).json({ 
+
       error: "Error al cambiar el estado del combo",
+
       details: err.message 
+
     });
+
   }
+
 };

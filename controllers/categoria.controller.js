@@ -1,99 +1,120 @@
 const { sql, getConnection } = require("../config/Connection");
 const bdModel = require("../models/bd.models");
-
+const path = require("path");
 // =========================================
-// 🧩 Función auxiliar: obtener configuración
+// 🧩 Configuración: Solo Categorías (Producto e Insumo)
 // =========================================
 function getCategoriaConfig(tipo) {
   const lower = tipo?.toLowerCase();
+
   if (lower === "producto" || lower === "productos") {
     return {
       table: "Categoria_Producto",
-      id: "ID_Categoria_P",
-      nombre: "Nombre",
+      idCol: "ID_Categoria_P",    // Nombre columna ID
+      nameCol: "Nombre",          // Nombre columna Texto
+      checkTable: "Producto",     // Tabla para verificar dependencias
+      checkRef: "ID_Categoria_P", // Columna foránea para verificar
       model: bdModel.CategoriaProducto
     };
   } else if (lower === "insumo" || lower === "insumos") {
     return {
       table: "Categoria_Insumos",
-      id: "ID_Categoria_I",
-      nombre: "Nombre",
+      idCol: "ID_Categoria_I",
+      nameCol: "Nombre",
+      checkTable: "Insumos",
+      checkRef: "ID_Categoria_I",
       model: bdModel.CategoriaInsumos
     };
   } else {
-    throw new Error("Tipo de categoría inválido. Use 'producto' o 'insumo'.");
+    throw new Error("Tipo inválido. Solo se permite: 'producto' o 'insumo'.");
   }
 }
 
 // =========================================
-// 🧭 Mapper: adapta fila SQL al modelo base
-// =========================================
-function mapToCategoria(row = {}, model) {
-  const template = model || { ID: 0, Nombre: "" };
-  return { ...template, ...row };
-}
-
-// =========================================
-// 📘 Obtener todas las categorías
+// 📘 Obtener categorías
 // =========================================
 exports.getCategorias = async (req, res) => {
-  const { tipo } = req.params;
+  const { tipo } = req.params; // 'producto' o 'insumo'
   try {
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
-    const result = await pool.request().query(`SELECT * FROM ${config.table}`);
-    const categorias = (result.recordset || []).map(row =>
-      mapToCategoria(row, config.model)
-    );
-    return res.status(200).json(categorias);
+    
+    // Ordenado por nombre (A-Z)
+    const result = await pool.request()
+        .query(`SELECT * FROM ${config.table} ORDER BY ${config.nameCol} ASC`);
+    
+    // Mapeamos al modelo (opcional, si quieres asegurar la estructura)
+    const data = result.recordset.map(row => ({ ...config.model, ...row }));
+    
+    return res.status(200).json(data);
   } catch (err) {
-    console.error("getCategorias error:", err);
+    console.error(`getCategorias [${tipo}] error:`, err);
     return res.status(500).json({ error: err.message });
   }
 };
 
 // =========================================
-// 📘 Obtener una categoría por ID
+// 📘 Obtener por ID
 // =========================================
 exports.getCategoriaById = async (req, res) => {
   const { tipo, id } = req.params;
   try {
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
+    
     const result = await pool.request()
       .input("id", sql.Int, id)
-      .query(`SELECT * FROM ${config.table} WHERE ${config.id} = @id`);
+      .query(`SELECT * FROM ${config.table} WHERE ${config.idCol} = @id`);
 
     if (!result.recordset.length) {
       return res.status(404).json({ error: "Categoría no encontrada" });
     }
 
-    return res.status(200).json(mapToCategoria(result.recordset[0], config.model));
+    return res.status(200).json({ ...config.model, ...result.recordset[0] });
   } catch (err) {
-    console.error("getCategoriaById error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
 // =========================================
-// 📗 Crear una nueva categoría
+// 📗 Crear Categoría (MEJORADO: Devuelve ID)
 // =========================================
 exports.createCategoria = async (req, res) => {
   const { tipo } = req.params;
   const { Nombre } = req.body;
 
   try {
-    if (!Nombre) {
-      return res.status(400).json({ error: "El campo 'Nombre' es obligatorio" });
-    }
+    if (!Nombre) return res.status(400).json({ error: "El campo Nombre es obligatorio" });
 
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
-    await pool.request()
-      .input("Nombre", sql.VarChar(100), Nombre)
-      .query(`INSERT INTO ${config.table} (${config.nombre}) VALUES (@Nombre)`);
 
-    return res.status(201).json({ message: `Categoría de ${tipo} creada exitosamente` });
+    // 1. Validar duplicado
+    const check = await pool.request()
+        .input("Nombre", sql.VarChar(100), Nombre)
+        .query(`SELECT TOP 1 1 FROM ${config.table} WHERE ${config.nameCol} = @Nombre`);
+    
+    if (check.recordset.length > 0) {
+        return res.status(409).json({ error: `La categoría '${Nombre}' ya existe.` });
+    }
+
+    // 2. Insertar y obtener ID
+    const query = `
+      INSERT INTO ${config.table} (${config.nameCol}) 
+      OUTPUT INSERTED.${config.idCol} AS ID
+      VALUES (@Nombre)
+    `;
+
+    const result = await pool.request()
+      .input("Nombre", sql.VarChar(100), Nombre)
+      .query(query);
+
+    return res.status(201).json({
+      message: `Categoría de ${tipo} creada`,
+      id: result.recordset[0].ID, // <-- Importante para el Frontend
+      nombre: Nombre
+    });
+
   } catch (err) {
     console.error("createCategoria error:", err);
     return res.status(500).json({ error: err.message });
@@ -101,7 +122,7 @@ exports.createCategoria = async (req, res) => {
 };
 
 // =========================================
-// 📙 Actualizar una categoría
+// 📙 Actualizar Categoría
 // =========================================
 exports.updateCategoria = async (req, res) => {
   const { tipo, id } = req.params;
@@ -111,25 +132,19 @@ exports.updateCategoria = async (req, res) => {
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
 
-    const request = pool.request();
-    request.input("id", sql.Int, id);
-    if (Nombre) request.input("Nombre", sql.VarChar(100), Nombre);
+    await pool.request()
+      .input("id", sql.Int, id)
+      .input("Nombre", sql.VarChar(100), Nombre)
+      .query(`UPDATE ${config.table} SET ${config.nameCol} = @Nombre WHERE ${config.idCol} = @id`);
 
-    await request.query(`
-      UPDATE ${config.table}
-      SET ${config.nombre} = @Nombre
-      WHERE ${config.id} = @id
-    `);
-
-    return res.status(200).json({ message: `Categoría de ${tipo} actualizada exitosamente` });
+    return res.status(200).json({ message: "Categoría actualizada correctamente" });
   } catch (err) {
-    console.error("updateCategoria error:", err);
     return res.status(500).json({ error: err.message });
   }
 };
 
 // =========================================
-// 📕 Eliminar una categoría (Versión Mejorada)
+// 📕 Eliminar Categoría (MEJORADO: Valida uso)
 // =========================================
 exports.deleteCategoria = async (req, res) => {
   const { tipo, id } = req.params;
@@ -137,38 +152,27 @@ exports.deleteCategoria = async (req, res) => {
     const config = getCategoriaConfig(tipo);
     const pool = await getConnection();
 
-    // Si es categoría de producto, verificar si hay productos asociados
-    if (tipo.toLowerCase() === "producto") {
-      const productosResult = await pool.request()
-        .input("id", sql.Int, id)
-        .query("SELECT COUNT(*) as count FROM Producto WHERE ID_Categoria_P = @id");
-      
-      if (productosResult.recordset[0].count > 0) {
-        return res.status(400).json({ 
-          error: "No se puede eliminar la categoría porque tiene productos asociados. Elimine o reassigne los productos primero." 
-        });
-      }
-    }
-
-    // Si es categoría de insumos, verificar si hay insumos asociados
-    if (tipo.toLowerCase() === "insumo") {
-      const insumosResult = await pool.request()
-        .input("id", sql.Int, id)
-        .query("SELECT COUNT(*) as count FROM Insumos WHERE ID_Categoria_I = @id");
-      
-      if (insumosResult.recordset[0].count > 0) {
-        return res.status(400).json({ 
-          error: "No se puede eliminar la categoría porque tiene insumos asociados. Elimine o reassigne los insumos primero." 
-        });
-      }
-    }
-
-    // Si no hay registros asociados, proceder con la eliminación
-    await pool.request()
+    // 1. Verificar si hay productos/insumos usando esta categoría
+    const depCheck = await pool.request()
       .input("id", sql.Int, id)
-      .query(`DELETE FROM ${config.table} WHERE ${config.id} = @id`);
+      .query(`SELECT COUNT(*) as count FROM ${config.checkTable} WHERE ${config.checkRef} = @id`);
 
-    return res.status(200).json({ message: `Categoría de ${tipo} eliminada exitosamente` });
+    if (depCheck.recordset[0].count > 0) {
+      return res.status(400).json({ 
+        error: `No se puede eliminar: Hay registros en ${config.checkTable} usando esta categoría.` 
+      });
+    }
+
+    // 2. Eliminar
+    const result = await pool.request()
+      .input("id", sql.Int, id)
+      .query(`DELETE FROM ${config.table} WHERE ${config.idCol} = @id`);
+
+    if (result.rowsAffected[0] === 0) {
+      return res.status(404).json({ error: "Categoría no encontrada" });
+    }
+
+    return res.status(200).json({ message: "Categoría eliminada correctamente" });
   } catch (err) {
     console.error("deleteCategoria error:", err);
     return res.status(500).json({ error: err.message });

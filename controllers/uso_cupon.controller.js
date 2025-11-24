@@ -5,14 +5,7 @@ const bdModel = require("../models/bd.models");
 // 🔄 Mapper: adapta una fila SQL al modelo UsoCupon
 // ==============================================
 function mapToUsoCupon(row = {}) {
-  const template = bdModel?.UsoCupon || {
-    ID_Uso_C: 0,
-    ID_Cupon: 0,
-    ID_Pedido: 0,
-    Descuento_Aplic: 0.0,
-    Monto_Venta: 0.0,
-    Fecha_Uso: null
-  };
+  const template = bdModel?.UsoCupon || {};
 
   return {
     ...template,
@@ -66,7 +59,7 @@ exports.getUsoCuponById = async (req, res) => {
 };
 
 // ==============================================
-// 📗 Registrar un nuevo uso de cupón
+// 📗 Registrar un nuevo uso de cupón (MEJORADO)
 // ==============================================
 exports.createUsoCupon = async (req, res) => {
   const {
@@ -78,7 +71,6 @@ exports.createUsoCupon = async (req, res) => {
   } = req.body;
 
   try {
-    // Validaciones mínimas (usar los campos que están en tu DDL)
     if (!ID_Cupon || !ID_Pedido) {
       return res.status(400).json({
         error: "Faltan campos obligatorios: ID_Cupon o ID_Pedido"
@@ -86,6 +78,21 @@ exports.createUsoCupon = async (req, res) => {
     }
 
     const pool = await getConnection();
+
+    // 1. Validar existencia de Cupón y Pedido (Opcional pero recomendado)
+    const check = await pool.request()
+        .input("ID_Cupon", sql.Int, ID_Cupon)
+        .input("ID_Pedido", sql.Int, ID_Pedido)
+        .query(`
+            SELECT 
+                (SELECT COUNT(*) FROM Cupones WHERE ID_Cupon = @ID_Cupon) as CuponExiste,
+                (SELECT COUNT(*) FROM Pedido WHERE ID_Pedido = @ID_Pedido) as PedidoExiste
+        `);
+    
+    if (check.recordset[0].CuponExiste === 0) return res.status(404).json({ error: "Cupón no encontrado" });
+    if (check.recordset[0].PedidoExiste === 0) return res.status(404).json({ error: "Pedido no encontrado" });
+
+    // 2. Insertar y obtener ID
     const request = pool.request()
       .input("ID_Cupon", sql.Int, ID_Cupon)
       .input("ID_Pedido", sql.Int, ID_Pedido)
@@ -103,12 +110,17 @@ exports.createUsoCupon = async (req, res) => {
       )
     `);
 
-    const nuevoId = result.recordset && result.recordset[0] ? result.recordset[0].ID_Uso_C : null;
+    const nuevoId = result.recordset[0].ID_Uso_C;
+
+    // 3. Retornar objeto completo
+    const nuevoUso = await pool.request().input("id", sql.Int, nuevoId)
+        .query("SELECT * FROM Uso_Cupon WHERE ID_Uso_C = @id");
 
     return res.status(201).json({
       message: "Uso de cupón registrado correctamente",
-      ID_Uso_C: nuevoId
+      uso_cupon: mapToUsoCupon(nuevoUso.recordset[0])
     });
+
   } catch (err) {
     console.error("createUsoCupon error:", err);
     return res.status(500).json({ error: "Error al registrar el uso de cupón" });
