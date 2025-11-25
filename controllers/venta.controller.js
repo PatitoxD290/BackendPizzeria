@@ -110,7 +110,8 @@ async function sumarPuntosCliente(transaction, ID_Cliente, Monto_Total) {
         }
         return puntosGanados;
     } catch (error) {
-        console.error("❌ Error CRÍTICO al sumar puntos y actualizar DB:", error); 
+        // ❌ Este log ayuda a diagnosticar si la tabla no existe o si hay un error SQL
+        console.error("❌ Error CRÍTICO al sumar puntos y actualizar DB (Revisar Cliente_Puntos):", error); 
         return 0; 
     }
 }
