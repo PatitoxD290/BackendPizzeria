@@ -88,18 +88,20 @@ app.use("/api/v2", deliveryRoutes);
 app.use("/api/v2", tamanoRoutes);
 
 // Rutas estáticas para imágenes (uploads)
+// Rutas estáticas para imágenes (uploads)
 app.use(
-  "/imagenesCata",
-  (req, res, next) => {
-    // Unificar origen con FRONTEND_URL
+   "/imagenesCata",
+   (req, res, next) => {
+     // Unificar origen con FRONTEND_URL y asegurar acceso
     res.setHeader("Access-Control-Allow-Origin", FRONTEND_URL);
     res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     res.setHeader("Access-Control-Allow-Credentials", "true");
     res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
-    next();
+      next(); 
   },
-  express.static(path.join(__dirname, "uploads"))
+   // CAMBIO CLAVE: Usamos la ruta simple relativa al WORKDIR del Dockerfile
+  express.static("uploads")
 );
 
 // Ruta 404
