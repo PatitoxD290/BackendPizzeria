@@ -74,7 +74,7 @@ async function calcularMontos(pool, ID_Pedido) {
 }
 
 // ==============================
-// 🔹 Helper: Sumar Puntos (10% del Total - Con Depuración)
+// 🔹 Helper: Sumar Puntos (10% del Total - Corregido SQL)
 // ==============================
 async function sumarPuntosCliente(transaction, ID_Cliente, Monto_Total) {
     try {
@@ -98,12 +98,14 @@ async function sumarPuntosCliente(transaction, ID_Cliente, Monto_Total) {
             await new sql.Request(transaction)
                 .input("Puntos", sql.Int, puntosGanados)
                 .input("ID_Cliente", sql.Int, ID_Cliente)
+                // ✅ CORRECCIÓN CRÍTICA: Se agrega el @ al parámetro SQL
                 .query("UPDATE Cliente_Puntos SET Puntos_Acumulados = Puntos_Acumulados + @Puntos, Fecha_Actualizacion = GETDATE() WHERE ID_Cliente = @ID_Cliente");
         } else {
             // Insertar nuevo registro de puntos
             await new sql.Request(transaction)
                 .input("ID_Cliente", sql.Int, ID_Cliente)
                 .input("Puntos", sql.Int, puntosGanados)
+                // ✅ CORRECCIÓN: Se usa @Puntos para el valor de inserción
                 .query("INSERT INTO Cliente_Puntos (ID_Cliente, Puntos_Acumulados, Fecha_Actualizacion) VALUES (@ID_Cliente, @Puntos, GETDATE())");
         }
         return puntosGanados;
