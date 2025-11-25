@@ -131,20 +131,6 @@ async function descontarStock(transaction, ID_Producto_T, Cantidad) {
     `);
 }
 
-async function obtenerProductoPorTamano(transaction, ID_Producto_T) {
-  const req = new sql.Request(transaction);
-  const result = await req
-    .input("ID_Producto_T", sql.Int, ID_Producto_T)
-    .query(`
-      SELECT P.ID_Producto, P.Cantidad_Disponible
-      FROM Producto_Tamano PT
-      INNER JOIN Producto P ON PT.ID_Producto = P.ID_Producto
-      WHERE PT.ID_Producto_T = @ID_Producto_T
-    `);
-
-  return result.recordset[0];
-}
-
 async function obtenerProductosDeCombo(transaction, ID_Combo) {
   const req = new sql.Request(transaction);
 
@@ -162,7 +148,7 @@ async function obtenerProductosDeCombo(transaction, ID_Combo) {
 }
 
 // ==============================================================
-//            CREAR PEDIDO CON DETALLE (PRODUCTO Y/O COMBO)
+//            CREAR PEDIDO CON DETALLE (PRODUCTO Y/O COMBO)
 // ==============================================================
 exports.createPedidoConDetalle = async (req, res) => {
   const {
@@ -406,17 +392,17 @@ exports.getDetallesConNotas = async (req, res) => {
 };
 
 // Actualizar pedido y detalles (transaccional, parcial)
-// Actualizar pedido y detalles (transaccional, parcial) con combos
 exports.updatePedidoConDetalle = async (req, res) => {
   const { id } = req.params; // ID_Pedido
   const {
     ID_Cliente,
     ID_Usuario,
     Estado_P,
-    Monto_Descuento,
     Notas,
-    detalles // array de { ID_Pedido_D, ID_Producto_T, ID_Combo, Cantidad }
+    detalles 
   } = req.body;
+
+  // ⚠️ Importante: Monto_Descuento y Total ELIMINADOS del cuerpo de la función ⚠️
 
   try {
     const pool = await getConnection();
@@ -424,7 +410,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
     await transaction.begin();
 
     try {
-      // Actualizar Pedido (campos parciales excepto SubTotal/Total, que recalcularemos)
+      // Actualizar Pedido (campos parciales)
       const updateFields = [];
       const reqPedido = new sql.Request(transaction);
       reqPedido.input("ID_Pedido", sql.Int, id);
@@ -445,13 +431,10 @@ exports.updatePedidoConDetalle = async (req, res) => {
         updateFields.push("Notas = @Notas");
         reqPedido.input("Notas", sql.VarChar(255), Notas);
       }
-      if (Monto_Descuento !== undefined) {
-        updateFields.push("Monto_Descuento = @Monto_Descuento");
-        reqPedido.input("Monto_Descuento", sql.Decimal(10, 2), Monto_Descuento);
-      }
+      // ⚠️ Monto_Descuento eliminado de la actualización ⚠️
 
       if (updateFields.length > 0) {
-        const queryUpdatePedido = `UPDATE Pedido SET ${updateFields.join(", ")} WHERE ID_Pedido = @ID_Pedido`; // CORREGIDO: Faltaban backticks
+        const queryUpdatePedido = `UPDATE Pedido SET ${updateFields.join(", ")} WHERE ID_Pedido = @ID_Pedido`;
         const resUpdPedido = await reqPedido.query(queryUpdatePedido);
         if (resUpdPedido.rowsAffected[0] === 0) {
           await transaction.rollback();
@@ -488,7 +471,7 @@ exports.updatePedidoConDetalle = async (req, res) => {
           }
 
           if (Cantidad !== undefined) {
-            if (Cantidad <= 0) { // CORREGIDO: Validar cantidad positiva
+            if (Cantidad <= 0) {
               await transaction.rollback();
               return res.status(400).json({ error: "La cantidad debe ser mayor a 0" });
             }
@@ -501,11 +484,11 @@ exports.updatePedidoConDetalle = async (req, res) => {
             // Obtener valores actuales si faltan campos
             const curDetRes = await new sql.Request(transaction)
               .input("ID_Pedido_D_TMP", sql.Int, ID_Pedido_D)
-              .query("SELECT ID_Producto_T, ID_Combo, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP"); // CORREGIDO: Agregar ID_Combo
+              .query("SELECT ID_Producto_T, ID_Combo, Cantidad FROM Pedido_Detalle WHERE ID_Pedido_D = @ID_Pedido_D_TMP");
 
             if (!curDetRes.recordset.length) {
               await transaction.rollback();
-              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` }); // CORREGIDO: Faltaban backticks
+              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` });
             }
 
             const cur = curDetRes.recordset[0];
@@ -534,11 +517,11 @@ exports.updatePedidoConDetalle = async (req, res) => {
           }
 
           if (fieldsDetalle.length > 0) {
-            const queryUpdateDetalle = `UPDATE Pedido_Detalle SET ${fieldsDetalle.join(", ")} WHERE ID_Pedido_D = @ID_Pedido_D`; // CORREGIDO: Faltaban backticks
+            const queryUpdateDetalle = `UPDATE Pedido_Detalle SET ${fieldsDetalle.join(", ")} WHERE ID_Pedido_D = @ID_Pedido_D`;
             const resUpdDet = await reqDet.query(queryUpdateDetalle);
             if (resUpdDet.rowsAffected[0] === 0) {
               await transaction.rollback();
-              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` }); // CORREGIDO: Faltaban backticks
+              return res.status(404).json({ error: `Detalle no encontrado: ${ID_Pedido_D}` });
             }
           }
         }
@@ -551,29 +534,17 @@ exports.updatePedidoConDetalle = async (req, res) => {
 
       const nuevoSubTotal = Number(sumRes.recordset[0].SubTotalCalc ?? 0);
 
-      // Obtener Monto_Descuento actual si no se envió
-      let descuento = Monto_Descuento;
-      if (descuento === undefined) {
-        const montoRes = await new sql.Request(transaction)
-          .input("ID_Pedido_M", sql.Int, id)
-          .query("SELECT Monto_Descuento FROM Pedido WHERE ID_Pedido = @ID_Pedido_M");
-        descuento = montoRes.recordset.length ? Number(montoRes.recordset[0].Monto_Descuento ?? 0) : 0;
-      }
-
-      const nuevoTotal = Number((nuevoSubTotal - (descuento ?? 0)).toFixed(2));
-
-      // Actualizar SubTotal y Total
+      // ⚠️ Monto_Descuento y Total han sido eliminados del cálculo y la actualización.
+      // Solo actualizamos SubTotal.
       await new sql.Request(transaction)
         .input("SubTotal", sql.Decimal(10, 2), nuevoSubTotal)
-        .input("Total", sql.Decimal(10, 2), nuevoTotal)
         .input("ID_Pedido", sql.Int, id)
-        .query("UPDATE Pedido SET SubTotal = @SubTotal, Total = @Total WHERE ID_Pedido = @ID_Pedido");
+        .query("UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido");
 
       await transaction.commit();
       return res.status(200).json({
         message: "Pedido y detalles actualizados correctamente",
-        SubTotal: nuevoSubTotal,
-        Total: nuevoTotal
+        SubTotal: nuevoSubTotal
       });
     } catch (err) {
       await transaction.rollback();
@@ -598,23 +569,19 @@ exports.getPedidoDetalles = async (req, res) => {
         SELECT 
           d.ID_Pedido_D, 
           d.ID_Producto_T, 
-          d.ID_Combo, -- 🔹 AGREGADO
+          d.ID_Combo, 
           d.Cantidad, 
           d.PrecioTotal,
-          -- Información de producto (si aplica)
           p.Nombre AS nombre_producto,
           t.Tamano AS nombre_tamano,
           cp.Nombre AS nombre_categoria,
-          -- Información de combo (si aplica)
           c.Nombre AS nombre_combo,
           c.Descripcion AS descripcion_combo
         FROM Pedido_Detalle d
-        -- LEFT JOIN para productos (puede ser null si es combo)
         LEFT JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
         LEFT JOIN Producto p ON pt.ID_Producto = p.ID_Producto
         LEFT JOIN Tamano t ON pt.ID_Tamano = t.ID_Tamano
         LEFT JOIN Categoria_Producto cp ON p.ID_Categoria_P = cp.ID_Categoria_P
-        -- LEFT JOIN para combos (puede ser null si es producto)
         LEFT JOIN Combos c ON d.ID_Combo = c.ID_Combo
         WHERE d.ID_Pedido = @ID_Pedido
         ORDER BY d.ID_Pedido_D
@@ -662,13 +629,11 @@ exports.getPedidoById = async (req, res) => {
           d.ID_Pedido_D, 
           d.ID_Pedido, 
           d.ID_Producto_T, 
-          d.ID_Combo, -- 🔹 AGREGADO
+          d.ID_Combo, 
           d.Cantidad, 
           d.PrecioTotal,
-          -- Información de producto
           p.Nombre AS nombre_producto,
           t.Tamano AS nombre_tamano,
-          -- Información de combo
           c.Nombre AS nombre_combo
         FROM Pedido_Detalle d
         LEFT JOIN Producto_Tamano pt ON d.ID_Producto_T = pt.ID_Producto_T
