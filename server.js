@@ -108,7 +108,7 @@ app.use((_req, res) => {
 });
 
 // Puerto
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 
 // Manejo básico de errores del proceso para que se registren
 process.on("uncaughtException", (err) => {
