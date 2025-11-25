@@ -18,7 +18,7 @@ function mapToPedido(row = {}) {
     ...template,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
-    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario, // Mantener null si no viene
+    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario,
     Hora_Pedido: row.Hora_Pedido ?? template.Hora_Pedido,
     Estado_P: row.Estado_P ?? template.Estado_P,
     SubTotal: row.SubTotal ?? template.SubTotal,
@@ -32,8 +32,8 @@ function mapToDetallePedido(row = {}) {
   const template = bdModel?.PedidoDetalle || {
     ID_Pedido_D: 0,
     ID_Pedido: 0,
-    ID_Producto_T: 0,
-    ID_Combo: 0, // 🔹 AGREGADO
+    ID_Producto_T: null, 
+    ID_Combo: null,      
     Cantidad: 1,
     PrecioTotal: 0.0
   };
@@ -43,7 +43,7 @@ function mapToDetallePedido(row = {}) {
     ID_Pedido_D: row.ID_Pedido_D ?? template.ID_Pedido_D,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Producto_T: row.ID_Producto_T ?? template.ID_Producto_T,
-    ID_Combo: row.ID_Combo ?? template.ID_Combo, // 🔹 AGREGADO
+    ID_Combo: row.ID_Combo ?? template.ID_Combo,
     Cantidad: row.Cantidad ?? template.Cantidad,
     PrecioTotal: row.PrecioTotal ?? template.PrecioTotal
   };
@@ -560,20 +560,16 @@ exports.updatePedidoConDetalle = async (req, res) => {
         descuento = montoRes.recordset.length ? Number(montoRes.recordset[0].Monto_Descuento ?? 0) : 0;
       }
 
-      const nuevoTotal = Number((nuevoSubTotal - (descuento ?? 0)).toFixed(2));
-
       // Actualizar SubTotal y Total
       await new sql.Request(transaction)
         .input("SubTotal", sql.Decimal(10, 2), nuevoSubTotal)
-        .input("Total", sql.Decimal(10, 2), nuevoTotal)
         .input("ID_Pedido", sql.Int, id)
-        .query("UPDATE Pedido SET SubTotal = @SubTotal, Total = @Total WHERE ID_Pedido = @ID_Pedido");
+        .query("UPDATE Pedido SET SubTotal = @SubTotal WHERE ID_Pedido = @ID_Pedido"); // 🟢 CORREGIDO
 
       await transaction.commit();
       return res.status(200).json({
         message: "Pedido y detalles actualizados correctamente",
-        SubTotal: nuevoSubTotal,
-        Total: nuevoTotal
+        SubTotal: nuevoSubTotal
       });
     } catch (err) {
       await transaction.rollback();
@@ -773,24 +769,24 @@ exports.getPedidosHoy = async (_req, res) => {
     const pool = await getConnection();
     
     // Primero obtener los pedidos del día
-    const pedidosQuery = `
-      SELECT 
-        p.ID_Pedido,
-        p.ID_Cliente,
-        p.ID_Usuario,
-        p.Hora_Pedido,
-        p.Estado_P,
-        p.SubTotal,
-        p.Notas,
-        p.Fecha_Registro,
-        c.Nombre AS Cliente_Nombre,
-        u.Perfil AS Usuario_Perfil
-      FROM Pedido p
-      LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
-      LEFT JOIN Usuario u ON p.ID_Usuario = u.ID_Usuario
-      WHERE CAST(p.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
-      ORDER BY p.Fecha_Registro DESC, p.Hora_Pedido ASC
-    `;
+const pedidosQuery = `
+  SELECT 
+    p.ID_Pedido,
+    p.ID_Cliente,
+    p.ID_Usuario,
+    p.Hora_Pedido,
+    p.Estado_P,
+    p.SubTotal,
+    p.Notas,
+    p.Fecha_Registro,
+    c.Nombre AS Cliente_Nombre,
+    u.Perfil AS Usuario_Perfil
+  FROM Pedido p
+  LEFT JOIN Cliente c ON p.ID_Cliente = c.ID_Cliente
+  LEFT JOIN Usuario u ON p.ID_Usuario = u.ID_Usuario
+  WHERE CAST(p.Fecha_Registro AS DATE) = CAST(GETDATE() AS DATE)
+  ORDER BY p.Fecha_Registro DESC, p.Hora_Pedido ASC
+`;
 
     const pedidosResult = await pool.request().query(pedidosQuery);
     const pedidos = pedidosResult.recordset || [];

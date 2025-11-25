@@ -5,7 +5,19 @@ const bdModel = require("../models/bd.models");
 // 🔹 Mapper
 // ==============================
 function mapToVenta(row = {}) {
-  const template = bdModel?.Venta || {};
+  const template = bdModel?.Venta || {
+    ID_Venta: 0,
+    ID_Pedido: 0,
+    ID_Tipo_Venta: 0,   
+    ID_Origen_Venta: 0, 
+    ID_Tipo_Pago: 0,    
+    IGV: 0.0,
+    Total: 0.0,
+    Monto_Recibido: 0.0,
+    Vuelto: 0.0,
+    Fecha_Registro: ""
+  };
+
   return {
     ...template,
     ID_Venta: row.ID_Venta ?? template.ID_Venta,

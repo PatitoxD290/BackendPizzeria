@@ -222,11 +222,11 @@ const Pedido = {
   ID_Pedido: 0,
   ID_Cliente: 0,
   ID_Usuario: null,
-  Notas: "",
+  Hora_Pedido: "", 
+  Estado_P: "P",
   SubTotal: 0.0,
-  Estado_P: "P", // P=Pendiente, C=Cancelado, E=Entregado
-  Fecha_Registro: "",
-  Hora_Pedido: ""
+  Notas: "",
+  Fecha_Registro: ""
 };
 
 // ===============================
@@ -256,8 +256,8 @@ const ComboDetalle = {
 const PedidoDetalle = {
   ID_Pedido_D: 0,
   ID_Pedido: 0,
-  ID_Producto_T: 0,
-  ID_Combo: 0,
+  ID_Producto_T: null, 
+  ID_Combo: null,      
   Cantidad: 1,
   PrecioTotal: 0.0
 };
