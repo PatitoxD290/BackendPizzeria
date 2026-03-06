@@ -18,7 +18,7 @@ function mapToPedido(row = {}) {
     ...template,
     ID_Pedido: row.ID_Pedido ?? template.ID_Pedido,
     ID_Cliente: row.ID_Cliente ?? template.ID_Cliente,
-    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario, // Mantener null si no viene
+    ID_Usuario: row.ID_Usuario ?? template.ID_Usuario, 
     Hora_Pedido: row.Hora_Pedido ?? template.Hora_Pedido,
     Estado_P: row.Estado_P ?? template.Estado_P,
     SubTotal: row.SubTotal ?? template.SubTotal,
@@ -33,7 +33,7 @@ function mapToDetallePedido(row = {}) {
     ID_Pedido_D: 0,
     ID_Pedido: 0,
     ID_Producto_T: 0,
-    ID_Combo: 0, // 🔹 AGREGADO
+    ID_Combo: 0, 
     Cantidad: 1,
     PrecioTotal: 0.0
   };
